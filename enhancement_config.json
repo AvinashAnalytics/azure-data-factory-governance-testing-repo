@@ -1,0 +1,31 @@
+{
+  "excel_enhancements": {
+    "enabled": true,
+    "core_formatting": {
+      "enabled": false
+    },
+    "conditional_formatting": {
+      "enabled": false
+    },
+    "hyperlinks": {
+      "enabled": false
+    },
+    "enhanced_summary": {
+      "enabled": true
+    },
+    "advanced_dashboard": {
+      "enabled": false
+    }
+  },
+  "hide_config": {
+    "enabled": true,
+    "hidden_sheets": [
+      "TriggerDetails"
+    ],
+    "hidden_columns": {
+      "ActivityExecutionOrder": ["FromSequence", "ToSequence", "FromParent", "ToParent"],
+      "Activities": ["Sequence", "ParseSequence", "Parent", "Depth"],
+      "Pipelines": []
+    }
+  }
+}
