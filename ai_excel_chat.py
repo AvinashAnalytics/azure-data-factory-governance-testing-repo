@@ -18,6 +18,7 @@ import os
 import re
 import time
 import json
+import datetime
 import hashlib
 import requests
 import pandas as pd
@@ -735,6 +736,8 @@ PRESET_QUESTIONS = [
      "Give me a comprehensive overview of this Azure Data Factory. How many pipelines, dataflows, datasets, linked services, and triggers are there? What are the main folders and categories? Show counts from the Statistics sheet."),
     ("🔗 Data Lineage",
      "Analyze the COMPLETE data lineage from the DataLineage sheet. Show all source → sink connections. What are the main source systems and target/destination systems? Group by pipeline and show the data flow path."),
+    ("📈 Lineage Deep Dive",
+     "Analyze the 'Data Lineage' sheet. Identify all source → sink table connections. For the final output:\n1. Group results by Target (Sink) table.\n2. Show the full data flow path for each.\n3. Identify the 'Main Sources' (top 5 most frequent).\n4. Format the flow paths as a clean Markdown Table with columns: [Target Table, Source Table, Pipeline Path].\nUse bold and clear headings."),
     ("⚠️ Orphaned Resources",
      "List ALL orphaned resources from every Orphaned* sheet: OrphanedPipelines, OrphanedDataFlows, OrphanedDatasets, OrphanedLinkedServices, OrphanedTriggers. Show the complete list with counts per category."),
     ("🏗️ Complex Pipelines",
@@ -756,150 +759,218 @@ PRESET_QUESTIONS = [
 
 AI_CHAT_CSS = """
 <style>
-/* AI Chat Tab — Theme-Aware Premium Styling */
+/* ═══════════════════════════════════════════════════════════════════
+   AI CHAT — HYPER-MODERN GLASSMORPHISM UI
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* --- Header --- */
 .ai-chat-header {
-    background: radial-gradient(circle at 10% 20%, rgba(var(--primary-rgb, 102, 126, 234), 0.12) 0%, transparent 40%),
-                radial-gradient(circle at 90% 80%, rgba(var(--secondary-rgb, 118, 75, 162), 0.12) 0%, transparent 40%),
-                linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.01) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.25);
-    border-radius: 20px;
-    padding: 2rem;
-    margin-bottom: 2rem;
+    background: radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.15) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(168, 85, 247, 0.15) 0%, transparent 40%),
+                linear-gradient(135deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), inset 0 0 60px rgba(99, 102, 241, 0.05);
+    border-radius: 24px;
+    padding: 2rem 2.5rem;
+    margin-bottom: 1.5rem;
     text-align: center;
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(20px);
+    position: relative;
+    overflow: hidden;
+}
+.ai-chat-header::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: conic-gradient(from 0deg at 50% 50%, transparent 0deg, rgba(99, 102, 241, 0.03) 90deg, transparent 180deg);
+    animation: headerGlow 8s linear infinite;
+}
+@keyframes headerGlow {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
 }
 .ai-chat-header h2 {
-    background: linear-gradient(135deg, var(--primary, #818cf8), var(--secondary, #a78bfa), #f472b6);
+    background: linear-gradient(135deg, #818cf8, #a78bfa, #f472b6, #818cf8);
+    background-size: 300% 300%;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
-    font-size: 1.8rem;
-    font-weight: 700;
+    font-size: 1.9rem;
+    font-weight: 800;
     margin: 0;
+    position: relative;
+    animation: gradientShift 4s ease infinite;
+    letter-spacing: -0.02em;
+}
+@keyframes gradientShift {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
 }
 .ai-chat-header p {
-    color: rgba(255,255,255,0.6);
-    margin: 0.3rem 0 0 0;
-    font-size: 0.95rem;
+    color: var(--muted, rgba(255,255,255,0.55));
+    margin: 0.4rem 0 0 0;
+    font-size: 0.9rem;
+    position: relative;
+    letter-spacing: 0.02em;
 }
+
+/* --- Metric Cards --- */
 .ai-metric-card {
-    background: linear-gradient(135deg, var(--surface, rgba(30, 30, 46, 0.8)), rgba(255,255,255,0.03));
-    border: 1px solid rgba(var(--primary-rgb, 99, 102, 241), 0.2);
-    border-radius: 12px;
-    padding: 1rem 1.2rem;
+    background: linear-gradient(135deg, rgba(30, 30, 46, 0.6), rgba(255,255,255,0.02));
+    border: 1px solid rgba(99, 102, 241, 0.15);
+    border-radius: 16px;
+    padding: 1.1rem 1.2rem;
     text-align: center;
-    backdrop-filter: blur(8px);
-    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    backdrop-filter: blur(12px);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+}
+.ai-metric-card::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 16px;
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), transparent);
+    opacity: 0;
+    transition: opacity 0.3s ease;
 }
 .ai-metric-card:hover {
-    border-color: rgba(var(--primary-rgb, 99, 102, 241), 0.5);
-    box-shadow: 0 0 16px rgba(var(--primary-rgb, 99, 102, 241), 0.15);
+    border-color: rgba(99, 102, 241, 0.4);
+    box-shadow: 0 0 20px rgba(99, 102, 241, 0.12);
+    transform: translateY(-2px);
 }
+.ai-metric-card:hover::after { opacity: 1; }
 .ai-metric-card .metric-value {
-    font-size: 1.5rem;
+    font-size: 1.45rem;
     font-weight: 700;
-    background: linear-gradient(135deg, var(--primary, #818cf8), var(--secondary, #c084fc));
+    background: linear-gradient(135deg, #818cf8, #c084fc);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
+    position: relative;
+    z-index: 1;
 }
 .ai-metric-card .metric-label {
-    font-size: 0.8rem;
-    color: rgba(255,255,255,0.5);
+    font-size: 0.75rem;
+    color: var(--muted, rgba(255,255,255,0.45));
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-top: 0.2rem;
+    letter-spacing: 0.08em;
+    margin-top: 0.25rem;
+    font-weight: 600;
+    position: relative;
+    z-index: 1;
 }
-.ai-preset-btn {
-    background: linear-gradient(135deg, rgba(var(--primary-rgb, 99, 102, 241), 0.1), rgba(var(--secondary-rgb, 168, 85, 247), 0.1));
-    border: 1px solid rgba(var(--primary-rgb, 99, 102, 241), 0.25);
-    border-radius: 10px;
-    padding: 0.6rem 1rem;
-    transition: all 0.3s ease;
-}
-.ai-preset-btn:hover {
-    border-color: rgba(var(--primary-rgb, 99, 102, 241), 0.6);
-    background: linear-gradient(135deg, rgba(var(--primary-rgb, 99, 102, 241), 0.2), rgba(var(--secondary-rgb, 168, 85, 247), 0.2));
-    transform: translateY(-1px);
-}
+
+/* --- Data Status Badge --- */
 .ai-context-badge {
     display: inline-block;
-    background: rgba(34, 197, 94, 0.15);
-    border: 1px solid rgba(34, 197, 94, 0.3);
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.25);
     border-radius: 20px;
-    padding: 0.3rem 0.8rem;
-    font-size: 0.75rem;
+    padding: 0.25rem 0.75rem;
+    font-size: 0.72rem;
     color: #4ade80;
+    font-weight: 600;
+    letter-spacing: 0.03em;
 }
 .ai-data-status {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    padding: 0.5rem 1rem;
-    border-radius: 8px;
-    font-size: 0.85rem;
+    padding: 0.6rem 1.2rem;
+    border-radius: 12px;
+    font-size: 0.82rem;
     margin-bottom: 1rem;
+    font-weight: 500;
 }
 .ai-data-status.loaded {
-    background: rgba(34, 197, 94, 0.1);
-    border: 1px solid rgba(34, 197, 94, 0.3);
+    background: rgba(34, 197, 94, 0.08);
+    border: 1px solid rgba(34, 197, 94, 0.2);
     color: #4ade80;
 }
 .ai-data-status.empty {
-    background: rgba(234, 179, 8, 0.1);
-    border: 1px solid rgba(234, 179, 8, 0.3);
+    background: rgba(234, 179, 8, 0.08);
+    border: 1px solid rgba(234, 179, 8, 0.2);
     color: #facc15;
 }
 
-/* --- Chat Bubbles --- */
-.chat-container {
-    display: flex;
-    flex-direction: column;
-    gap: 1.2rem;
-    padding: 1rem 0;
-}
-.chat-bubble {
-    padding: 1rem 1.4rem;
-    border-radius: 18px;
-    max-width: 85%;
-    line-height: 1.5;
-    position: relative;
-    font-size: 0.95rem;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-    animation: fadeIn 0.4s ease-out;
-}
-.bubble-user {
-    align-self: flex-end;
-    background: linear-gradient(135deg, var(--primary, #6366f1), var(--secondary, #8b5cf6));
-    color: white;
-    border-bottom-right-radius: 4px;
-}
-.bubble-assistant {
-    align-self: flex-start;
-    background: rgba(255, 255, 255, 0.05);
-    color: #e2e8f0;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-bottom-left-radius: 4px;
-    backdrop-filter: blur(10px);
-}
-.bubble-icon {
-    font-size: 1.2rem;
-    margin-bottom: 0.5rem;
-    display: block;
+/* ═══════════════════════════════════════════════════════════════════
+   CHAT MESSAGES — Override Streamlit defaults
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* User messages */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(168, 85, 247, 0.1)) !important;
+    border: 1px solid rgba(99, 102, 241, 0.2) !important;
+    border-radius: 18px 18px 6px 18px !important;
+    padding: 1rem 1.2rem !important;
+    margin: 0.4rem 0 !important;
+    box-shadow: 0 4px 16px rgba(99, 102, 241, 0.08) !important;
+    animation: fadeSlideIn 0.35s ease-out !important;
 }
 
-/* --- Thinking Indicator & Rotating System --- */
+/* Assistant messages */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    border-radius: 18px 18px 18px 6px !important;
+    padding: 1rem 1.2rem !important;
+    margin: 0.4rem 0 !important;
+    backdrop-filter: blur(8px) !important;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15) !important;
+    animation: fadeSlideIn 0.4s ease-out !important;
+}
+
+/* Avatar styling */
+[data-testid="stChatMessage"] [data-testid*="chatAvatarIcon"] {
+    font-size: 1.3rem !important;
+}
+
+/* Message text */
+[data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] p {
+    font-size: 0.92rem !important;
+    line-height: 1.65 !important;
+    color: var(--text-color, #e2e8f0) !important;
+}
+
+/* Code blocks in messages */
+[data-testid="stChatMessage"] pre {
+    background: rgba(0, 0, 0, 0.3) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 10px !important;
+}
+
+/* Chat input styling */
+[data-testid="stChatInput"] {
+    border-radius: 16px !important;
+    border: 1px solid rgba(99, 102, 241, 0.2) !important;
+    background: rgba(255, 255, 255, 0.03) !important;
+    backdrop-filter: blur(10px) !important;
+}
+[data-testid="stChatInput"]:focus-within {
+    border-color: rgba(99, 102, 241, 0.5) !important;
+    box-shadow: 0 0 20px rgba(99, 102, 241, 0.1) !important;
+}
+
+@keyframes fadeSlideIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* --- Thinking Indicator --- */
 .thinking-container {
     display: flex;
     align-items: center;
     gap: 1rem;
     padding: 1rem 1.5rem;
-    background: rgba(var(--primary-rgb, 99, 102, 241), 0.1);
-    border-radius: 14px;
-    border: 1px dashed rgba(var(--primary-rgb, 99, 102, 241), 0.4);
-    margin: 1rem 0;
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(168, 85, 247, 0.05));
+    border-radius: 16px;
+    border: 1px dashed rgba(99, 102, 241, 0.3);
+    margin: 0.8rem 0;
     width: fit-content;
-    box-shadow: 0 4px 12px rgba(var(--primary-rgb, 99, 102, 241), 0.1);
+    box-shadow: 0 4px 16px rgba(99, 102, 241, 0.08);
 }
 .rotating-system {
     font-size: 1.8rem;
@@ -908,22 +979,184 @@ AI_CHAT_CSS = """
 }
 @keyframes rotateAtom {
     0% { transform: rotate(0deg) scale(1); }
-    50% { transform: rotate(180deg) scale(1.2); }
+    50% { transform: rotate(180deg) scale(1.15); }
     100% { transform: rotate(360deg) scale(1); }
 }
 .thinking-text {
     font-weight: 600;
-    background: linear-gradient(135deg, var(--primary, #818cf8), var(--secondary, #c084fc));
+    background: linear-gradient(135deg, #818cf8, #c084fc);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.04em;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   PRESET BUTTONS — Glassmorphism Quick Actions
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Quick Question expander */
+[data-testid="stExpander"] details[open] summary {
+    border-bottom: 1px solid rgba(99, 102, 241, 0.15);
+    padding-bottom: 0.6rem;
+    margin-bottom: 0.4rem;
+}
+
+/* --- Status indicator pulse --- */
+.status-pulse {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #4ade80;
+    margin-right: 6px;
+    animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.4); }
+    50% { box-shadow: 0 0 0 6px rgba(74, 222, 128, 0); }
+}
+
+/* --- Chat control bar --- */
+.chat-control-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 1rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 12px;
+    margin-bottom: 0.8rem;
+    font-size: 0.78rem;
+    color: var(--muted, rgba(255,255,255,0.5));
+}
+.chat-control-bar .chat-id-badge {
+    font-family: 'Courier New', monospace;
+    font-size: 0.7rem;
+    opacity: 0.6;
+}
+
+/* --- Empty state centered --- */
+.empty-state {
+    text-align: center;
+    padding: 3rem 2rem;
+    color: var(--muted, rgba(255,255,255,0.4));
+}
+.empty-state .empty-icon {
+    font-size: 3.5rem;
+    margin-bottom: 1rem;
+    opacity: 0.6;
+    animation: float 3s ease-in-out infinite;
+}
+@keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-8px); }
+}
+.empty-state h3 {
+    color: var(--text-color, #e2e8f0);
+    font-weight: 600;
+    margin: 0 0 0.5rem 0;
+}
+.empty-state p {
+    font-size: 0.88rem;
+    max-width: 400px;
+    margin: 0 auto;
+    line-height: 1.5;
 }
 </style>
 """
 
 
+
+class ChatPersistenceManager:
+    """Manages saving and loading chat history from local JSON files."""
+    
+    SAVE_DIR = Path("saved_chats")
+    
+    def __init__(self):
+        self.SAVE_DIR.mkdir(parents=True, exist_ok=True)
+        
+    def save_chat(self, chat_id: str, chat_history: List[Dict], api_history: List[Dict], tokens: int, model: str):
+        """Save a chat session to disk."""
+        if not chat_history:
+            return
+            
+        file_path = self.SAVE_DIR / f"{chat_id}.json"
+        
+        # Determine title from first user message (word-boundary truncation)
+        title = "New Conversation"
+        for msg in chat_history:
+            if msg["role"] == "user":
+                raw = msg["content"].replace("\n", " ").strip()
+                if len(raw) > 45:
+                    title = raw[:42].rsplit(" ", 1)[0] + "..."
+                else:
+                    title = raw
+                break
+        
+        # Cap API history to prevent JSON bloat
+        capped_api_history = api_history[-12:] if len(api_history) > 12 else api_history
+        
+        data = {
+            "chat_id": chat_id,
+            "title": title,
+            "timestamp": datetime.datetime.now().isoformat(),
+            "chat_history": chat_history,
+            "api_history": capped_api_history,
+            "total_tokens": tokens,
+            "model": model
+        }
+        
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            
+    def get_history(self) -> List[Dict]:
+        """Get list of all saved chats with metadata."""
+        history = []
+        if not self.SAVE_DIR.exists():
+            return []
+            
+        for file in self.SAVE_DIR.glob("*.json"):
+            try:
+                with open(file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    history.append({
+                        "id": data["chat_id"],
+                        "title": data["title"],
+                        "timestamp": data["timestamp"],
+                        "tokens": data.get("total_tokens", 0)
+                    })
+            except Exception:
+                continue
+        
+        # Sort by timestamp descending
+        return sorted(history, key=lambda x: x["timestamp"], reverse=True)
+        
+    def load_chat(self, chat_id: str) -> Optional[Dict]:
+        """Load a specific chat session."""
+        file_path = self.SAVE_DIR / f"{chat_id}.json"
+        if not file_path.exists():
+            return None
+            
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+            
+    def delete_chat(self, chat_id: str):
+        """Delete a saved chat."""
+        file_path = self.SAVE_DIR / f"{chat_id}.json"
+        if file_path.exists():
+            file_path.unlink()
+
+
 def initialize_ai_session_state():
     """Initialize all AI chat session state variables."""
+    first_init = "ai_chat_id" not in st.session_state
+    
+    if first_init:
+        st.session_state.ai_chat_id = f"chat_{int(time.time())}"
+        
     defaults = {
         "ai_chat_history": [],        # Display history: [{"role", "content"}]
         "ai_model": DEFAULT_MODEL,
@@ -936,6 +1169,23 @@ def initialize_ai_session_state():
     for key, default in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = default
+    
+    # Auto-load the most recent chat on first visit
+    if first_init and len(st.session_state.ai_chat_history) == 0:
+        try:
+            pm = ChatPersistenceManager()
+            history = pm.get_history()
+            if history:
+                latest = history[0]  # Already sorted by timestamp desc
+                data = pm.load_chat(latest["id"])
+                if data and data.get("chat_history"):
+                    st.session_state.ai_chat_id = data["chat_id"]
+                    st.session_state.ai_chat_history = data.get("chat_history", [])
+                    st.session_state.ai_api_history = data.get("api_history", [])
+                    st.session_state.ai_total_tokens_used = data.get("total_tokens", 0)
+                    st.session_state.ai_model = data.get("model", DEFAULT_MODEL)
+        except Exception:
+            pass  # Graceful fallback to empty state
 
 
 def _get_or_rebuild_context(excel_data: Dict[str, pd.DataFrame]) -> ExcelContextBuilder:
@@ -970,7 +1220,21 @@ def _get_or_rebuild_context(excel_data: Dict[str, pd.DataFrame]) -> ExcelContext
 
 def render_ai_sidebar():
     """Render AI configuration in the sidebar."""
+    initialize_ai_session_state()  # Defensive — ensure state exists
     st.markdown("### 🤖 AI Chat")
+
+    # Initialize persistence
+    pm = ChatPersistenceManager()
+
+    # --- New Chat Button ---
+    if st.button("➕ New Chat", use_container_width=True, type='primary'):
+        st.session_state.ai_chat_id = f"chat_{int(time.time())}"
+        st.session_state.ai_chat_history = []
+        st.session_state.ai_api_history = []
+        st.session_state.ai_total_tokens_used = 0
+        st.rerun()
+
+    st.markdown("---")
 
     # API Key status
     key_mgr = APIKeyManager()
@@ -1005,21 +1269,83 @@ def render_ai_sidebar():
     if selected != st.session_state.get("ai_model"):
         st.session_state.ai_model = selected
 
+    # --- Chat History Management ---
+    st.markdown("---")
+    history = pm.get_history()
+    current_chat_id = st.session_state.get("ai_chat_id", "")
+    
+    if history:
+        st.markdown("#### 📜 Recent Chats")
+        
+        for chat in history[:10]:
+            chat_id = chat["id"]
+            title = chat["title"]
+            is_current = (chat_id == current_chat_id)
+            
+            # Format relative timestamp
+            try:
+                ts = datetime.datetime.fromisoformat(chat["timestamp"])
+                delta = datetime.datetime.now() - ts
+                if delta.total_seconds() < 60:
+                    time_label = "just now"
+                elif delta.total_seconds() < 3600:
+                    time_label = f"{int(delta.total_seconds() / 60)}m ago"
+                elif delta.total_seconds() < 86400:
+                    time_label = f"{int(delta.total_seconds() / 3600)}h ago"
+                else:
+                    time_label = f"{int(delta.days)}d ago"
+            except Exception:
+                time_label = ""
+            
+            # Layout: [Chat Button | Delete Button]
+            col_chat, col_del = st.columns([5, 1])
+            with col_chat:
+                # Visual indicator for active chat
+                prefix = "✨ " if is_current else "💬 "
+                btn_type = "primary" if is_current else "secondary"
+                btn_label = f"{prefix}{title}"
+                if time_label:
+                    btn_label += f"  •  {time_label}"
+                
+                if st.button(btn_label, key=f"hist_{chat_id}", use_container_width=True, type=btn_type):
+                    if not is_current:
+                        data = pm.load_chat(chat_id)
+                        if data:
+                            st.session_state.ai_chat_id = data["chat_id"]
+                            st.session_state.ai_chat_history = data.get("chat_history", [])
+                            st.session_state.ai_api_history = data.get("api_history", [])
+                            st.session_state.ai_total_tokens_used = data.get("total_tokens", 0)
+                            st.session_state.ai_model = data.get("model", st.session_state.ai_model)
+                            st.rerun()
+            
+            with col_del:
+                if st.button("🗑️", key=f"del_{chat_id}", help="Delete this chat"):
+                    pm.delete_chat(chat_id)
+                    if current_chat_id == chat_id:
+                        st.session_state.ai_chat_id = f"chat_{int(time.time())}"
+                        st.session_state.ai_chat_history = []
+                        st.session_state.ai_api_history = []
+                        st.session_state.ai_total_tokens_used = 0
+                    st.rerun()
+    else:
+        st.caption("💬 No saved chats yet. Start a conversation!")
+    
     # Context info
     ctx = st.session_state.get("ai_context_builder")
     if ctx:
+        st.markdown("---")
         st.caption(f"📄 {ctx.sheet_count} sheets • ~{ctx.total_tokens:,} tokens")
 
-    # Chat history info
+    # Chat history info & Clear button
     chat_len = len(st.session_state.get("ai_chat_history", []))
     if chat_len > 0:
-        st.caption(f"💬 {chat_len} messages")
-        if st.button("🗑️ Clear Chat", key="sidebar_clear_chat", width='stretch'):
+        st.caption(f"💬 {chat_len} messages in current chat")
+        if st.button("🧹 Clear Current Messages", key="sidebar_clear_chat", use_container_width=True):
             st.session_state.ai_chat_history = []
             st.session_state.ai_api_history = []
             st.session_state.ai_total_tokens_used = 0
-            st.session_state.ai_context_builder = None  # Force rebuild
             st.rerun()
+
 
 
 def render_ai_chat_tab(excel_data: Dict[str, pd.DataFrame] = None):
@@ -1165,14 +1491,44 @@ def render_ai_chat_tab(excel_data: Dict[str, pd.DataFrame] = None):
             col = col1 if i % 2 == 0 else col2
             with col:
                 if st.button(label, key=f"preset_{i}", width='stretch'):
-                    _process_question(question, ctx_builder)
+                    st.session_state.pending_question = question
                     st.rerun()
 
+    # ── Chat Control Bar ──
+    tokens_used = st.session_state.get("ai_total_tokens_used", 0)
+    msg_count = len(st.session_state.ai_chat_history)
+    if msg_count > 0:
+        ctrl_col1, ctrl_col2 = st.columns([4, 1])
+        with ctrl_col1:
+            st.markdown(f"""
+            <div class="chat-control-bar">
+                <span><span class="status-pulse"></span> {msg_count} messages • ~{tokens_used:,} tokens used</span>
+                <span class="chat-id-badge">{st.session_state.ai_chat_id[-8:]}</span>
+            </div>
+            """, unsafe_allow_html=True)
+        with ctrl_col2:
+            if st.button("➕ New Chat", key="main_new_chat", use_container_width=True, type="primary"):
+                st.session_state.ai_chat_id = f"chat_{int(time.time())}"
+                st.session_state.ai_chat_history = []
+                st.session_state.ai_api_history = []
+                st.session_state.ai_total_tokens_used = 0
+                st.rerun()
+
     # ── Chat History Display ──
-    for msg in st.session_state.ai_chat_history:
-        icon = "🧑‍💻" if msg["role"] == "user" else "🤖"
-        with st.chat_message(msg["role"], avatar=icon):
-            st.markdown(msg["content"])
+    if msg_count == 0:
+        # Beautiful empty state
+        st.markdown("""
+        <div class="empty-state">
+            <div class="empty-icon">🤖</div>
+            <h3>Ready to Analyze</h3>
+            <p>Click a Quick Question above or type your own question below to start analyzing your Azure Data Factory.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        for msg in st.session_state.ai_chat_history:
+            icon = "🧑‍💻" if msg["role"] == "user" else "🤖"
+            with st.chat_message(msg["role"], avatar=icon):
+                st.markdown(msg["content"])
 
     # ── Chat Input & Processing ──
     user_input = st.chat_input(
@@ -1180,45 +1536,45 @@ def render_ai_chat_tab(excel_data: Dict[str, pd.DataFrame] = None):
         key="ai_chat_input",
     )
 
-    # Note: Using separate variable for session state processing to avoid race conditions
-    if user_input:
+    # Handle both manual input and preset questions
+    active_question = user_input or st.session_state.pop("pending_question", None)
+
+    if active_question:
         # 1. Render user message immediately
         with st.chat_message("user", avatar="🧑‍💻"):
-            st.markdown(user_input)
+            st.markdown(active_question)
             
         # 2. Process with visible feedback
         with st.chat_message("assistant", avatar="🤖"):
             with st.status("🧠 Analyzing your ADF Factory...", expanded=True) as status:
                 status.write("📂 Building context from Excel sheets...")
-                data_context, est_tokens, warnings = ctx_builder.get_context_for_question(user_input)
+                data_context, est_tokens, warnings = ctx_builder.get_context_for_question(active_question)
                 
                 for w in warnings:
                     st.warning(w)
                 
                 status.write(f"📡 Sending request (~{est_tokens:,} tokens) to AI...")
-                response = _process_question_v2(user_input, ctx_builder, data_context, est_tokens)
+                response = _process_question_v2(active_question, ctx_builder, data_context, est_tokens)
                 
                 status.update(label="✅ Analysis complete!", state="complete")
             
-            # 3. Show final response (XSS safe via st.markdown)
+            # 3. Show final response
             st.markdown(response)
         
         # Persist and rerun to keep history in sync
-        st.session_state.ai_chat_history.append({"role": "user", "content": user_input})
+        st.session_state.ai_chat_history.append({"role": "user", "content": active_question})
         st.session_state.ai_chat_history.append({"role": "assistant", "content": response})
+        
+        # Save to disk
+        ChatPersistenceManager().save_chat(
+            st.session_state.ai_chat_id,
+            st.session_state.ai_chat_history,
+            st.session_state.ai_api_history,
+            st.session_state.ai_total_tokens_used,
+            st.session_state.ai_model
+        )
+        
         st.rerun()
-    
-    # Preset handling (needs to trigger the same process)
-    # Note: Preset buttons already call a rerun, so we need a flag
-    if st.session_state.get("pending_question"):
-        q = st.session_state.pop("pending_question")
-        # We can't easily jump back into the chat input flow here without duplication
-        # or a very complex state machine. For now, presets are handled by _process_question
-        # but without the st.status (due to rerun constraints). 
-        # Better: presets just set chat_input and rerun? Streamlit doesn't support setting chat_input.
-        # So we use the old _process_question for presets (with minimal feedback) 
-        # and the new flow for manual input.
-        pass
 
 
 def _process_question_v2(question: str, ctx_builder: ExcelContextBuilder, data_context: str, est_tokens: int) -> str:
@@ -1268,9 +1624,4 @@ REMINDER: At the end, mention which sheets you used to answer.
     return response or "❌ No response received."
 
 
-def _process_question(question: str, ctx_builder: ExcelContextBuilder):
-    """Old processor kept for Presets compat (minimal feedback)."""
-    data_context, est_tokens, warnings = ctx_builder.get_context_for_question(question)
-    response = _process_question_v2(question, ctx_builder, data_context, est_tokens)
-    st.session_state.ai_chat_history.append({"role": "user", "content": question})
-    st.session_state.ai_chat_history.append({"role": "assistant", "content": response})
+
