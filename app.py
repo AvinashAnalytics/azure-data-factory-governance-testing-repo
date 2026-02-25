@@ -949,6 +949,7 @@ class ADF_Dashboard:
         # AI Chat Settings
         if HAS_AI_CHAT:
             st.markdown("---")
+            initialize_ai_session_state()
             render_ai_sidebar()
         
         st.markdown("---")
