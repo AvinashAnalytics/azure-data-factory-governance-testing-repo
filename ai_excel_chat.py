@@ -55,15 +55,27 @@ AVAILABLE_MODELS = {
     ),
     "gemini-2.5-flash": ModelConfig(
         "gemini-2.5-flash", "Gemini 2.5 Flash",
-        65536, 1_000_000, "Fast & accurate", "⚡"
+        8192, 1_000_000, "Fast, lightweight generation", "✨"
+    ),
+    "gemini-2.0-pro-exp-02-05": ModelConfig(
+        "gemini-2.0-pro-exp-02-05", "Gemini 2.0 Pro (Exp)",
+        65536, 2_000_000, "Advanced reasoning", "🔬"
     ),
     "gemini-2.0-flash": ModelConfig(
         "gemini-2.0-flash", "Gemini 2.0 Flash",
         8192, 1_000_000, "Stable & quick", "💨"
     ),
+    "gemini-pro-latest": ModelConfig(
+        "gemini-pro-latest", "Gemini 1.5 Pro",
+        65536, 2_000_000, "Deep context (2M)", "📚"
+    ),
     "gemini-flash-latest": ModelConfig(
         "gemini-flash-latest", "Gemini 1.5 Flash",
         8192, 1_000_000, "Legacy Flash", "📜"
+    ),
+    "gemini-flash-lite-latest": ModelConfig(
+        "gemini-flash-lite-latest", "Gemini 1.5 Flash-8B",
+        8192, 1_000_000, "High volume, low latency", "🚀"
     ),
 }
 
@@ -102,7 +114,7 @@ class APIKeyManager:
     def _load_keys(self):
         """Load API keys from .env and session state."""
         # Prioritize common environment variable names
-        for var in ["GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_AI_STUDIO_KEY"]:
+        for var in ["GOOGLE_API_KEY", "GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GOOGLE_AI_STUDIO_KEY"]:
             key = os.getenv(var, "").strip()
             if key and key not in self.keys:
                 # Only add if seemingly valid (simple check)
@@ -211,12 +223,16 @@ class GeminiClient:
                     "parts": [{"text": system_instruction}]
                 }
 
+            # Dynamic timeout: large prompts need more time
+            prompt_len = len(json.dumps(payload))
+            dynamic_timeout = max(180, min(prompt_len // 2000, 600))
+
             try:
                 response = requests.post(
                     url,
                     headers={"Content-Type": "application/json"},
                     json=payload,
-                    timeout=180,
+                    timeout=dynamic_timeout,
                 )
 
                 if response.status_code == 200:
@@ -234,6 +250,19 @@ class GeminiClient:
                         return f"❌ Failed to parse AI response: {str(e)[:200]}"
 
                 elif response.status_code == 429:
+                    try:
+                        error_msg = response.json().get("error", {}).get("message", "").lower()
+                    except Exception:
+                        error_msg = ""
+                    
+                    if "quota" in error_msg or "exceeded" in error_msg:
+                        # All free-tier keys share the same quota — rotating is futile
+                        is_pro = "pro" in str(model).lower()
+                        if is_pro:
+                            return f"❌ **API Quota Exceeded (429 HTTP)**. Gemini Pro's free tier is strictly limited to **32,000** Tokens-Per-Minute. Your query was likely too large for this tier. Please switch to **Gemini 2.5 Flash** (1-Million token limit) or use a paid key."
+                        else:
+                            return f"❌ **API Quota Exceeded (429 HTTP)**. You have hit the Google API free tier limits (such as 15 Requests-Per-Minute or daily limits). Please wait a minute before sending another request, or use a paid key."
+                    
                     self.key_manager.rotate()
                     wait = min(2 ** attempt, 16)
                     time.sleep(wait)
@@ -276,7 +305,7 @@ class GeminiClient:
             except Exception as e:
                 return f"❌ Unexpected error: {str(e)[:300]}"
 
-        return "❌ All API keys exhausted or rate limited. Please wait a moment and try again."
+        return "❌ **All API keys exhausted or rate limited.**\n_Note: If using a free key on a 'Pro' model, the limit is strictly 32,000 tokens per minute. Try switching to a 'Flash' model (1-Million tokens/min) for large Lineage queries._"
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -322,6 +351,36 @@ TIER2_KEYWORDS = {
         "OrphanedLinkedServices", "OrphanedTriggers", "Errors",
         "Triggers", "TriggerDetails",
     ],
+    # Table Lineage — needs datasets + linked services for lookup
+    "table lineage": ["Datasets", "DatasetUsage", "LinkedServices", "LinkedServiceUsage", "DataFlowTransformations"],
+    "target linked service": ["Datasets", "LinkedServices"],
+    "source linked service": ["Datasets", "LinkedServices"],
+    "sinklinkedservice": ["Datasets", "LinkedServices"],
+    "sourcelinkedservice": ["Datasets", "LinkedServices"],
+    "intermediate layer": ["Datasets"],
+    # Column Lineage — needs all dataflow and dataset sheets
+    "column lineage": [
+        "Datasets", "DatasetUsage", "LinkedServices", "DataFlowLineage",
+        "DataLineage", "DataFlowTransformations",
+    ],
+    "granular column": [
+        "Datasets", "DatasetUsage", "LinkedServices", "DataFlowLineage",
+        "DataLineage", "DataFlowTransformations",
+    ],
+    # Preset-specific keywords for best results
+    "factory overview": [
+        "Datasets", "DatasetUsage", "LinkedServices", "LinkedServiceUsage",
+        "Triggers", "TriggerDetails",
+    ],
+    "complex pipelines": ["Datasets", "LinkedServices"],
+    "impact": ["Datasets", "LinkedServices", "Triggers"],
+    "blast radius": ["Datasets", "LinkedServices", "Triggers"],
+    "dataflow": ["DataFlowTransformations", "Datasets", "LinkedServices"],
+    "health check": [
+        "OrphanedPipelines", "OrphanedDataFlows", "OrphanedDatasets",
+        "OrphanedLinkedServices", "OrphanedTriggers", "Errors",
+        "Triggers", "TriggerDetails", "Datasets", "LinkedServices",
+    ],
     "all data": [  # Send EVERYTHING when asked
         "Datasets", "DatasetUsage", "LinkedServices", "LinkedServiceUsage",
         "Triggers", "TriggerDetails", "OrphanedPipelines", "OrphanedDataFlows",
@@ -337,6 +396,10 @@ ACTIVITIES_KEYWORDS = [
     "stored procedure", "sql", "lookup", "web activity", "foreach",
     "execute pipeline", "set variable", "get metadata", "if condition",
     "switch", "wait", "webhook", "script",
+    # Lineage queries always need the Activities sheet
+    "table lineage", "column lineage", "setvariable", "set path",
+    "valuesinfo", "execution stage", "sinklinked", "sourcelinked",
+    "intermediate layer", "transformation layer",
 ]
 
 
@@ -402,14 +465,7 @@ class ExcelContextBuilder:
     def data_hash(self) -> str:
         return self._data_hash
 
-    def _df_to_csv(self, df: pd.DataFrame, max_rows: int = None) -> str:
-        """Convert DataFrame to CSV string."""
-        if df.empty:
-            return "(empty — 0 rows)"
-        if max_rows and len(df) > max_rows:
-            csv = df.head(max_rows).to_csv(index=False)
-            return csv + f"\n... ({len(df) - max_rows} more rows not shown)"
-        return df.to_csv(index=False)
+    # NOTE: _df_to_csv removed — dead code. CSV conversion done inline in build_tier*_context.
 
     def build_system_context(self) -> str:
         """Build the system prompt with sheet catalog and anti-hallucination rules."""
@@ -532,9 +588,13 @@ RESPONSE FORMAT:
 • End with a brief "Data Sources" section listing which sheets were used
 """
 
-    def build_tier1_context(self) -> str:
-        """Build COMPLETE context from critical sheets — NO truncation."""
+    def build_tier1_context(self, pipeline_filter: List[str] = None) -> str:
+        """Build COMPLETE context from critical sheets — NO truncation.
+        If pipeline_filter is provided, filter sheets that have a Pipeline column."""
         context_parts = []
+
+        # Sheets that can be filtered by Pipeline column
+        PIPELINE_FILTERABLE = {"PipelineAnalysis", "DataLineage", "DataFlowLineage", "ImpactAnalysis", "Pipelines"}
 
         for sheet_name in TIER1_SHEETS:
             if sheet_name not in self.sheets:
@@ -543,20 +603,81 @@ RESPONSE FORMAT:
             if df.empty:
                 continue
 
-            # ✅ FIX: Send ALL data — no row limits, no column filtering
-            # Only exception: print a size indicator
+            # Apply pipeline filter if specified and sheet supports it
+            if pipeline_filter and sheet_name in PIPELINE_FILTERABLE and "Pipeline" in df.columns:
+                df = df[df["Pipeline"].isin(pipeline_filter)]
+                if df.empty:
+                    continue
+
             csv_data = df.to_csv(index=False)
             est_tokens = len(csv_data) // 4
+            filter_tag = f" [FILTERED: {len(pipeline_filter)} pipelines]" if pipeline_filter and sheet_name in PIPELINE_FILTERABLE else ""
             context_parts.append(
-                f"\n### 📋 Sheet: {sheet_name} "
+                f"\n### 📋 Sheet: {sheet_name}{filter_tag} "
                 f"({len(df)} rows × {len(df.columns)} cols, ~{est_tokens:,} tokens)\n"
                 f"{csv_data}"
             )
 
         return "\n".join(context_parts)
 
-    def build_tier2_context(self, question: str) -> str:
-        """Build keyword-matched context from supplementary sheets."""
+    def _extract_related_entities(self, pipeline_filter: List[str]) -> dict:
+        """
+        Cascade filter: from a pipeline filter, extract all related entity names
+        (DataFlows, Datasets, LinkedServices) used by those pipelines.
+        This enables downstream filtering of Tier2 sheets that lack a Pipeline column.
+        """
+        related = {
+            "dataflows": set(),
+            "datasets": set(),
+            "linked_services": set(),
+        }
+
+        if not pipeline_filter:
+            return related
+
+        # Extract from Activities sheet (richest source)
+        if "Activities" in self.sheets:
+            acts = self.sheets["Activities"]
+            if "Pipeline" in acts.columns:
+                filtered_acts = acts[acts["Pipeline"].isin(pipeline_filter)]
+
+                # DataFlow names
+                if "DataFlow" in filtered_acts.columns:
+                    related["dataflows"].update(filtered_acts["DataFlow"].dropna().unique())
+
+                # Source/Sink LinkedServices
+                for col in ["SourceLinkedService", "SinkLinkedService"]:
+                    if col in filtered_acts.columns:
+                        related["linked_services"].update(filtered_acts[col].dropna().unique())
+
+                # Source/Sink tables → derive Dataset names from Datasets sheet
+                for col in ["SourceTable", "SinkTable"]:
+                    if col in filtered_acts.columns:
+                        related["datasets"].update(filtered_acts[col].dropna().unique())
+
+        # Also extract from DataLineage (Tier1, already filtered)
+        if "DataLineage" in self.sheets:
+            dl = self.sheets["DataLineage"]
+            if "Pipeline" in dl.columns:
+                filtered_dl = dl[dl["Pipeline"].isin(pipeline_filter)]
+                for col in ["SourceDataset", "SinkDataset", "Dataset"]:
+                    if col in filtered_dl.columns:
+                        related["datasets"].update(filtered_dl[col].dropna().unique())
+                for col in ["SourceLinkedService", "SinkLinkedService", "LinkedService"]:
+                    if col in filtered_dl.columns:
+                        related["linked_services"].update(filtered_dl[col].dropna().unique())
+
+        # Clean up empty strings
+        for key in related:
+            related[key].discard("")
+
+        return related
+
+    def build_tier2_context(self, question: str,
+                            dataflow_filter: List[str] = None,
+                            trigger_filter: List[str] = None,
+                            cascaded_entities: dict = None) -> str:
+        """Build keyword-matched context from supplementary sheets, with entity filtering."""
         q_lower = question.lower()
         matched_sheets = set()
 
@@ -576,6 +697,25 @@ RESPONSE FORMAT:
         if not matched_sheets:
             return ""
 
+        # Sheets filterable by DataFlow name
+        DATAFLOW_FILTERABLE = {"DataFlows", "DataFlowLineage", "DataFlowTransformations"}
+        # Sheets filterable by Trigger name
+        TRIGGER_FILTERABLE = {"Triggers", "TriggerDetails"}
+        # Sheets filterable by cascaded Dataset/LinkedService names
+        DATASET_FILTERABLE = {"Datasets", "DatasetUsage"}
+        LINKEDSERVICE_FILTERABLE = {"LinkedServices", "LinkedServiceUsage"}
+
+        # Merge explicit filters with cascaded entities
+        effective_df_filter = set(dataflow_filter or [])
+        effective_dataset_filter = set()
+        effective_ls_filter = set()
+
+        if cascaded_entities:
+            if cascaded_entities.get("dataflows") and not dataflow_filter:
+                effective_df_filter.update(cascaded_entities["dataflows"])
+            effective_dataset_filter.update(cascaded_entities.get("datasets", set()))
+            effective_ls_filter.update(cascaded_entities.get("linked_services", set()))
+
         context_parts = []
         for sheet_name in sorted(matched_sheets):
             if sheet_name not in self.sheets:
@@ -583,18 +723,51 @@ RESPONSE FORMAT:
             df = self.sheets[sheet_name]
             if df.empty:
                 continue
+
+            filter_tag = ""
+            # Apply DataFlow filter (explicit or cascaded)
+            if effective_df_filter and sheet_name in DATAFLOW_FILTERABLE and "DataFlow" in df.columns:
+                df = df[df["DataFlow"].isin(effective_df_filter)]
+                filter_tag = f" [CASCADED: {len(effective_df_filter)} dataflow(s)]"
+                if df.empty:
+                    continue
+            # Apply Trigger filter (explicit)
+            if trigger_filter and sheet_name in TRIGGER_FILTERABLE and "Trigger" in df.columns:
+                df = df[df["Trigger"].isin(trigger_filter)]
+                filter_tag = f" [FILTERED: {len(trigger_filter)} trigger(s)]"
+                if df.empty:
+                    continue
+            # Apply cascaded Dataset filter
+            if effective_dataset_filter and sheet_name in DATASET_FILTERABLE:
+                for dcol in ["Dataset", "DatasetName"]:
+                    if dcol in df.columns:
+                        df = df[df[dcol].isin(effective_dataset_filter)]
+                        filter_tag = f" [CASCADED: {len(effective_dataset_filter)} related entities]"
+                        break
+                if df.empty:
+                    continue
+            # Apply cascaded LinkedService filter
+            if effective_ls_filter and sheet_name in LINKEDSERVICE_FILTERABLE:
+                for lcol in ["LinkedService", "LinkedServiceName"]:
+                    if lcol in df.columns:
+                        df = df[df[lcol].isin(effective_ls_filter)]
+                        filter_tag = f" [CASCADED: {len(effective_ls_filter)} related services]"
+                        break
+                if df.empty:
+                    continue
+
             csv_data = df.to_csv(index=False)
             est_tokens = len(csv_data) // 4
             context_parts.append(
-                f"\n### 📋 Sheet: {sheet_name} "
+                f"\n### 📋 Sheet: {sheet_name}{filter_tag} "
                 f"({len(df)} rows × {len(df.columns)} cols, ~{est_tokens:,} tokens)\n"
                 f"{csv_data}"
             )
 
         return "\n".join(context_parts)
 
-    def build_tier3_context(self, question: str) -> str:
-        """Build Activities context — filtered by pipeline or summarized."""
+    def build_tier3_context(self, question: str, model_name: str = DEFAULT_MODEL, pipeline_filter: List[str] = None) -> str:
+        """Build Activities context — filtered by pipeline or summarized, unless high-context model."""
         q_lower = question.lower()
 
         needs_activities = any(kw in q_lower for kw in ACTIVITIES_KEYWORDS)
@@ -607,6 +780,27 @@ RESPONSE FORMAT:
         activities_df = self.sheets["Activities"]
         if activities_df.empty:
             return ""
+
+        # ── Apply explicit pipeline filter from UI ──
+        if pipeline_filter and "Pipeline" in activities_df.columns:
+            activities_df = activities_df[activities_df["Pipeline"].isin(pipeline_filter)]
+            if activities_df.empty:
+                return "\n### 📋 Sheet: Activities\n(No activities found for the selected pipelines)"
+            csv_data = activities_df.to_csv(index=False)
+            return (
+                f"\n### 📋 Sheet: Activities "
+                f"[FILTERED: {len(pipeline_filter)} pipelines] "
+                f"({len(activities_df)} rows)\n{csv_data}"
+            )
+
+        # High-context models (1M+ tokens) can handle the full Activities sheet
+        model_config = AVAILABLE_MODELS.get(model_name)
+        if model_config and model_config.context_window >= 1_000_000:
+            csv_data = activities_df.to_csv(index=False)
+            return (
+                f"\n### 📋 Sheet: Activities "
+                f"(FULL DATA - {len(activities_df)} rows)\n{csv_data}"
+            )
 
         # Try to find specific pipeline names mentioned in the question
         pipeline_names = []
@@ -675,16 +869,36 @@ RESPONSE FORMAT:
 
         return "\n".join(parts)
 
-    def get_context_for_question(self, question: str, model: str = DEFAULT_MODEL) -> Tuple[str, int, List[str]]:
+    def get_context_for_question(self, question: str, model: str = DEFAULT_MODEL,
+                                  pipeline_filter: List[str] = None,
+                                  dataflow_filter: List[str] = None,
+                                  trigger_filter: List[str] = None) -> Tuple[str, int, List[str]]:
         """
         Intelligently select and build context based on query relevance.
         Returns: (context_text, est_tokens, warnings)
         """
         parts = []
         warnings = []
+
+        # Filter banners
+        if pipeline_filter:
+            parts.append(
+                f"⚠️ PIPELINE FILTER ACTIVE: Only showing data for these {len(pipeline_filter)} pipeline(s): "
+                + ", ".join(pipeline_filter)
+            )
+        if dataflow_filter:
+            parts.append(
+                f"⚠️ DATAFLOW FILTER ACTIVE: Only showing data for these {len(dataflow_filter)} dataflow(s): "
+                + ", ".join(dataflow_filter)
+            )
+        if trigger_filter:
+            parts.append(
+                f"⚠️ TRIGGER FILTER ACTIVE: Only showing data for these {len(trigger_filter)} trigger(s): "
+                + ", ".join(trigger_filter)
+            )
         
         # Always include high-level summary (Tier 1)
-        tier1 = self.build_tier1_context()
+        tier1 = self.build_tier1_context(pipeline_filter=pipeline_filter)
         if tier1:
             parts.append(
                 "═══════════════════════════════════════════════\n"
@@ -692,8 +906,18 @@ RESPONSE FORMAT:
                 "═══════════════════════════════════════════════\n" + tier1
             )
 
-        # Add relevant Tier 2
-        tier2 = self.build_tier2_context(question)
+        # ── Cascading Entity Extraction ──
+        # When pipeline filter is active, derive DataFlows/Datasets/LinkedServices
+        # used by those pipelines → cascade-filter supplementary (Tier2) sheets
+        cascaded = self._extract_related_entities(pipeline_filter) if pipeline_filter else None
+
+        # Add relevant Tier 2 (with entity filtering + cascading)
+        tier2 = self.build_tier2_context(
+            question,
+            dataflow_filter=dataflow_filter,
+            trigger_filter=trigger_filter,
+            cascaded_entities=cascaded,
+        )
         if tier2:
             parts.append(
                 "═══════════════════════════════════════════════\n"
@@ -702,7 +926,7 @@ RESPONSE FORMAT:
             )
 
         # Add filtered Tier 3
-        tier3 = self.build_tier3_context(question)
+        tier3 = self.build_tier3_context(question, model, pipeline_filter=pipeline_filter)
         if tier3:
             parts.append(
                 "═══════════════════════════════════════════════\n"
@@ -711,7 +935,9 @@ RESPONSE FORMAT:
             )
 
         full_context = "\n\n".join(parts)
-        est_tokens = len(full_context) // 4
+        # Include system prompt + history estimate for a more accurate token count
+        system_len = len(self.build_system_context()) if hasattr(self, 'build_system_context') else 3000
+        est_tokens = (len(full_context) + system_len) // 4
         return full_context, est_tokens, warnings
 
     @property
@@ -734,23 +960,128 @@ RESPONSE FORMAT:
 PRESET_QUESTIONS = [
     ("📊 Factory Overview",
      "Give me a comprehensive overview of this Azure Data Factory. How many pipelines, dataflows, datasets, linked services, and triggers are there? What are the main folders and categories? Show counts from the Statistics sheet."),
-    ("🔗 Data Lineage",
+
+    ("🔗 Pipeline Lineage",
      "Analyze the COMPLETE data lineage from the DataLineage sheet. Show all source → sink connections. What are the main source systems and target/destination systems? Group by pipeline and show the data flow path."),
-    ("📈 Lineage Deep Dive",
-     "Analyze the 'Data Lineage' sheet. Identify all source → sink table connections. For the final output:\n1. Group results by Target (Sink) table.\n2. Show the full data flow path for each.\n3. Identify the 'Main Sources' (top 5 most frequent).\n4. Format the flow paths as a clean Markdown Table with columns: [Target Table, Source Table, Pipeline Path].\nUse bold and clear headings."),
+
+    ("📈 Table Lineage",
+     """You are an expert ADF Table Lineage Analyst for Tiger Analytics accelerators.
+
+Input: Excel data from ADF Pipeline Analyzer. Focus on these sheets for extracting lineage:
+- `Activities`: Contains granular activity details including `Pipeline`, `ActivityType`, `SourceTable`, `SinkTable`, `SourceLinkedService`, `SinkLinkedService`, `ValuesInfo` (for intermediate layers), `DataFlow` (for dataflow names).
+- `DataFlows`: Contains `SinkTables` for data flows.
+- `Datasets`: Contains `LinkedService` for datasets.
+- `LinkedServices`: For linked service details.
+
+Task: Extract comprehensive Table-Level Lineage.
+
+1. **Trace Lineage Path**: For each pipeline, follow the data flow from source to target, identifying all intermediate steps and transformations.
+2. **Extract Components**: For each stage in the lineage, identify the following based on the provided instructions:
+   * **Pipeline Name**: From `Activities` sheet, `Pipeline` column.
+   * **Target Table**: From `Activities` sheet, `SinkTable` column for the final data-producing activity (e.g., last execution stage). Also cross-reference with `DataFlows` sheet's `SinkTables` for the corresponding DataFlow.
+   * **Target Linked Service Connection**: From `Datasets` sheet, find the `LinkedService` associated with the Dataset that the Target Table belongs to. If not directly available, use `SinkLinkedService` from the final activity in `Activities`.
+   * **Transformation Layer (dataflow/SP)**: From `Activities` sheet, look at `DataFlow` column for 'ExecuteDataFlow' activities or `ActivityType` for 'StoredProcedure' activities, especially for the last execution stage.
+   * **Intermediate layer (Stg table/ADLS)**: From `Activities` sheet, search for 'SetVariable' or 'Set Path' activities. Extract relevant patterns like "Inbound/GlobalSC/..." from the `ValuesInfo` column by concatenating SetContainer + SetPath values.
+   * **Source Table**: From `Activities` sheet, `SourceTable` column, particularly for 'Copy Data', 'Data Flow Source', or 'Stored Procedure' activities at the initial stages.
+   * **Source Linked Service**: From `Datasets` sheet, find the `LinkedService` associated with the Dataset that the Source Table belongs to. If not directly available, use `SourceLinkedService` from the initial activity in `Activities`.
+
+3. **Output Format** (Markdown table):
+   | Target Table | Target Linked Service Connection | Transformation Layer (dataflow/SP) | Intermediate layer(Stg table/ADLS) | Source Table | Source Linked Service | Pipeline Name |
+
+4. **Example Output Path**:
+   `dr.NHSC_EventMessageHeader -> LS_ASA -> Dataflow (df_EventMessageHeader) -> Inbound/GlobalSC/EventMessageHeader -> EDW.PRSTM.S6_SC_TM_EVENTMESSAGEHEADER_DM_V -> LS_SNOWFLAKE_PROD -> pl_EventMessageHeader`
+
+Be precise, cite activity names and relevant sheet references. Process ALL pipelines in the provided data."""),
+
+    ("🔍 Column Lineage",
+     """You are an expert ADF Column Lineage Analyst for Tiger Analytics accelerators.
+
+Input is Excel data from ADF Pipeline Analyzer: sheets with pipelines (`Pipelines`, `PipelineAnalysis`), datasets (`Datasets`, `DatasetUsage`), copy/data flow activities (`Activities`, `DataFlows`, `DataFlowLineage`, `DataLineage`), and parameters (`GlobalParameters`).
+
+Task: Extract GRANULAR COLUMN-LEVEL LINEAGE.
+1. Parse sources (datasets/linkedServices), transformations (mappingDataFlows: derived cols, joins, filters, aggregates; copyActivity projections), targets.
+2. For each target column: Trace origin column(s) from source(s), list transformations (e.g., "UPPER(source.col1) AS target_colA"), data types, lineage path.
+3. Detect gaps: Flag unmapped cols, inferred mappings (e.g., via param@dataset.schema), risks (drift, nulls).
+4. Output:
+   - Markdown table: | Target Dataset | Target Column | Source Dataset(s) | Source Column(s) | Transformations | Data Type | Confidence (0-100) |
+   - Summary: Completeness score, critical paths, modernization recs (e.g., to Fabric/dbt).
+
+Be precise, cite activity names and sheet references."""),
+
     ("⚠️ Orphaned Resources",
      "List ALL orphaned resources from every Orphaned* sheet: OrphanedPipelines, OrphanedDataFlows, OrphanedDatasets, OrphanedLinkedServices, OrphanedTriggers. Show the complete list with counts per category."),
+
     ("🏗️ Complex Pipelines",
      "Show ALL pipelines ranked by ComplexityScore from PipelineAnalysis. Include: Pipeline name, Folder, TotalActivities, Complexity, ComplexityScore, ImpactLevel, HasDataFlow, HasSQL, SourceSystems, TargetSystems."),
+
     ("💥 Impact Analysis",
      "From the ImpactAnalysis sheet, show ALL pipelines with CRITICAL or HIGH ImpactLevel. Include blast radius, upstream/downstream counts, connected triggers, and affected datasets."),
+
     ("🔄 DataFlow Details",
      "From DataFlows and DataFlowLineage sheets, show ALL dataflows with their source tables, sink tables, transformations, linked services. Which dataflows are most complex?"),
+
     ("🗓️ Trigger Schedule",
      "From the Triggers and TriggerDetails sheets, list ALL triggers with: name, type, state (Started/Stopped), frequency, schedule, and which pipelines they execute. Flag any issues."),
+
     ("🏥 Full Health Check",
      "Perform a COMPLETE health check using ALL sheets. Report: (1) Orphaned resource counts, (2) Pipelines with CRITICAL impact but no triggers, (3) Overly complex pipelines, (4) Unused datasets, (5) Misconfigured triggers, (6) Any errors from the Errors sheet."),
 ]
+
+# ── Preset Filter Guide: tells users which filters help which preset ──
+# Each entry: (recommended_filters, sheets_loaded_description, hint_text)
+PRESET_FILTER_GUIDE = {
+    "📊 Factory Overview": {
+        "filters": [],
+        "sheets": "Statistics, PipelineAnalysis, Datasets, LinkedServices, Triggers",
+        "hint": "No filter needed — counts from entire factory.",
+    },
+    "🔗 Pipeline Lineage": {
+        "filters": ["🔍 Pipeline"],
+        "sheets": "DataLineage, PipelineAnalysis + Activities",
+        "hint": "Use Pipeline filter to focus on specific pipeline lineage paths.",
+    },
+    "📈 Table Lineage": {
+        "filters": ["🔍 Pipeline"],
+        "sheets": "Activities ↔ DataFlows ↔ Datasets ↔ LinkedServices (cross-referenced)",
+        "hint": "Use Pipeline filter to trace specific pipelines. Loads 4 sheets with cross-references.",
+    },
+    "🔍 Column Lineage": {
+        "filters": ["🔍 Pipeline", "🔄 DataFlow"],
+        "sheets": "DataFlowLineage ↔ DataFlows ↔ Datasets ↔ Activities (cross-referenced)",
+        "hint": "Use Pipeline + DataFlow filters for focused column tracing.",
+    },
+    "⚠️ Orphaned Resources": {
+        "filters": [],
+        "sheets": "OrphanedPipelines, OrphanedDataFlows, OrphanedDatasets, OrphanedLinkedServices, OrphanedTriggers",
+        "hint": "No filter needed — scans all orphaned sheets.",
+    },
+    "🏗️ Complex Pipelines": {
+        "filters": ["🔍 Pipeline"],
+        "sheets": "PipelineAnalysis ↔ Activities (cross-referenced for complexity scoring)",
+        "hint": "Use Pipeline filter to analyze specific pipeline complexity.",
+    },
+    "💥 Impact Analysis": {
+        "filters": ["🔍 Pipeline"],
+        "sheets": "ImpactAnalysis ↔ Datasets ↔ Triggers (cross-referenced for blast radius)",
+        "hint": "Use Pipeline filter to check impact of specific pipelines.",
+    },
+    "🔄 DataFlow Details": {
+        "filters": ["🔄 DataFlow"],
+        "sheets": "DataFlows ↔ DataFlowLineage ↔ DataFlowTransformations ↔ Datasets (cross-referenced)",
+        "hint": "Use DataFlow filter to analyze specific dataflows. Pipeline filter has no effect here.",
+    },
+    "🗓️ Trigger Schedule": {
+        "filters": ["🗓️ Trigger"],
+        "sheets": "Triggers ↔ TriggerDetails (cross-referenced with pipeline associations)",
+        "hint": "Use Trigger filter to analyze specific triggers. Pipeline filter has no effect here.",
+    },
+    "🏥 Full Health Check": {
+        "filters": ["🔍 Pipeline"],
+        "sheets": "All Orphaned sheets + ImpactAnalysis + Errors + Triggers + PipelineAnalysis",
+        "hint": "Use Pipeline filter to health-check specific pipelines, or leave empty for full factory scan.",
+    },
+}
+
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -760,16 +1091,58 @@ PRESET_QUESTIONS = [
 AI_CHAT_CSS = """
 <style>
 /* ═══════════════════════════════════════════════════════════════════
-   AI CHAT — HYPER-MODERN GLASSMORPHISM UI
+   AI CHAT — HYPER-MODERN GLASSMORPHISM UI (Dark + Light theme)
    ═══════════════════════════════════════════════════════════════════ */
+
+/* --- Theme-aware CSS variables --- */
+:root {
+    --ai-bg-primary: rgba(30, 30, 46, 0.6);
+    --ai-bg-secondary: rgba(255, 255, 255, 0.03);
+    --ai-text: #e2e8f0;
+    --ai-muted: rgba(255, 255, 255, 0.45);
+    --ai-border: rgba(255, 255, 255, 0.08);
+    --ai-code-bg: rgba(0, 0, 0, 0.3);
+    --ai-header-shadow: rgba(0, 0, 0, 0.3);
+    --ai-msg-user-bg: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(168, 85, 247, 0.1));
+    --ai-msg-asst-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+}
+
+/* Light / White theme overrides */
+@media (prefers-color-scheme: light) {
+    :root {
+        --ai-bg-primary: rgba(255, 255, 255, 0.85);
+        --ai-bg-secondary: rgba(0, 0, 0, 0.02);
+        --ai-text: #1e293b;
+        --ai-muted: rgba(0, 0, 0, 0.5);
+        --ai-border: rgba(0, 0, 0, 0.1);
+        --ai-code-bg: rgba(0, 0, 0, 0.06);
+        --ai-header-shadow: rgba(0, 0, 0, 0.08);
+        --ai-msg-user-bg: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(168, 85, 247, 0.05));
+        --ai-msg-asst-bg: linear-gradient(135deg, rgba(0, 0, 0, 0.02), rgba(0, 0, 0, 0.01));
+    }
+}
+/* Streamlit's own light theme detection */
+[data-testid="stAppViewContainer"][data-theme="light"],
+html[data-theme="light"],
+.stApp[data-theme="light"] {
+    --ai-bg-primary: rgba(255, 255, 255, 0.85);
+    --ai-bg-secondary: rgba(0, 0, 0, 0.02);
+    --ai-text: #1e293b;
+    --ai-muted: rgba(0, 0, 0, 0.5);
+    --ai-border: rgba(0, 0, 0, 0.1);
+    --ai-code-bg: rgba(0, 0, 0, 0.06);
+    --ai-header-shadow: rgba(0, 0, 0, 0.08);
+    --ai-msg-user-bg: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(168, 85, 247, 0.05));
+    --ai-msg-asst-bg: linear-gradient(135deg, rgba(0, 0, 0, 0.02), rgba(0, 0, 0, 0.01));
+}
 
 /* --- Header --- */
 .ai-chat-header {
     background: radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.15) 0%, transparent 40%),
                 radial-gradient(circle at 90% 80%, rgba(168, 85, 247, 0.15) 0%, transparent 40%),
-                linear-gradient(135deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), inset 0 0 60px rgba(99, 102, 241, 0.05);
+                var(--ai-bg-secondary);
+    border: 1px solid var(--ai-border);
+    box-shadow: 0 8px 32px var(--ai-header-shadow), inset 0 0 60px rgba(99, 102, 241, 0.05);
     border-radius: 24px;
     padding: 2rem 2.5rem;
     margin-bottom: 1.5rem;
@@ -793,7 +1166,7 @@ AI_CHAT_CSS = """
     to { transform: rotate(360deg); }
 }
 .ai-chat-header h2 {
-    background: linear-gradient(135deg, #818cf8, #a78bfa, #f472b6, #818cf8);
+    background: linear-gradient(135deg, #6366f1, #8b5cf6, #ec4899, #6366f1);
     background-size: 300% 300%;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -809,7 +1182,7 @@ AI_CHAT_CSS = """
     50% { background-position: 100% 50%; }
 }
 .ai-chat-header p {
-    color: var(--muted, rgba(255,255,255,0.55));
+    color: var(--ai-muted);
     margin: 0.4rem 0 0 0;
     font-size: 0.9rem;
     position: relative;
@@ -818,7 +1191,7 @@ AI_CHAT_CSS = """
 
 /* --- Metric Cards --- */
 .ai-metric-card {
-    background: linear-gradient(135deg, rgba(30, 30, 46, 0.6), rgba(255,255,255,0.02));
+    background: var(--ai-bg-primary);
     border: 1px solid rgba(99, 102, 241, 0.15);
     border-radius: 16px;
     padding: 1.1rem 1.2rem;
@@ -846,7 +1219,7 @@ AI_CHAT_CSS = """
 .ai-metric-card .metric-value {
     font-size: 1.45rem;
     font-weight: 700;
-    background: linear-gradient(135deg, #818cf8, #c084fc);
+    background: linear-gradient(135deg, #6366f1, #a855f7);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     position: relative;
@@ -854,7 +1227,7 @@ AI_CHAT_CSS = """
 }
 .ai-metric-card .metric-label {
     font-size: 0.75rem;
-    color: var(--muted, rgba(255,255,255,0.45));
+    color: var(--ai-muted);
     text-transform: uppercase;
     letter-spacing: 0.08em;
     margin-top: 0.25rem;
@@ -871,7 +1244,7 @@ AI_CHAT_CSS = """
     border-radius: 20px;
     padding: 0.25rem 0.75rem;
     font-size: 0.72rem;
-    color: #4ade80;
+    color: #16a34a;
     font-weight: 600;
     letter-spacing: 0.03em;
 }
@@ -888,12 +1261,12 @@ AI_CHAT_CSS = """
 .ai-data-status.loaded {
     background: rgba(34, 197, 94, 0.08);
     border: 1px solid rgba(34, 197, 94, 0.2);
-    color: #4ade80;
+    color: #16a34a;
 }
 .ai-data-status.empty {
     background: rgba(234, 179, 8, 0.08);
     border: 1px solid rgba(234, 179, 8, 0.2);
-    color: #facc15;
+    color: #ca8a04;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -902,7 +1275,7 @@ AI_CHAT_CSS = """
 
 /* User messages */
 [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
-    background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(168, 85, 247, 0.1)) !important;
+    background: var(--ai-msg-user-bg) !important;
     border: 1px solid rgba(99, 102, 241, 0.2) !important;
     border-radius: 18px 18px 6px 18px !important;
     padding: 1rem 1.2rem !important;
@@ -913,13 +1286,13 @@ AI_CHAT_CSS = """
 
 /* Assistant messages */
 [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)) !important;
-    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    background: var(--ai-msg-asst-bg) !important;
+    border: 1px solid var(--ai-border) !important;
     border-radius: 18px 18px 18px 6px !important;
     padding: 1rem 1.2rem !important;
     margin: 0.4rem 0 !important;
     backdrop-filter: blur(8px) !important;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15) !important;
+    box-shadow: 0 4px 16px var(--ai-header-shadow) !important;
     animation: fadeSlideIn 0.4s ease-out !important;
 }
 
@@ -932,13 +1305,13 @@ AI_CHAT_CSS = """
 [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] p {
     font-size: 0.92rem !important;
     line-height: 1.65 !important;
-    color: var(--text-color, #e2e8f0) !important;
+    color: var(--ai-text) !important;
 }
 
 /* Code blocks in messages */
 [data-testid="stChatMessage"] pre {
-    background: rgba(0, 0, 0, 0.3) !important;
-    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    background: var(--ai-code-bg) !important;
+    border: 1px solid var(--ai-border) !important;
     border-radius: 10px !important;
 }
 
@@ -946,7 +1319,7 @@ AI_CHAT_CSS = """
 [data-testid="stChatInput"] {
     border-radius: 16px !important;
     border: 1px solid rgba(99, 102, 241, 0.2) !important;
-    background: rgba(255, 255, 255, 0.03) !important;
+    background: var(--ai-bg-secondary) !important;
     backdrop-filter: blur(10px) !important;
 }
 [data-testid="stChatInput"]:focus-within {
@@ -984,7 +1357,7 @@ AI_CHAT_CSS = """
 }
 .thinking-text {
     font-weight: 600;
-    background: linear-gradient(135deg, #818cf8, #c084fc);
+    background: linear-gradient(135deg, #6366f1, #a855f7);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     letter-spacing: 0.04em;
@@ -1007,13 +1380,13 @@ AI_CHAT_CSS = """
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #4ade80;
+    background: #22c55e;
     margin-right: 6px;
     animation: pulse 2s ease-in-out infinite;
 }
 @keyframes pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.4); }
-    50% { box-shadow: 0 0 0 6px rgba(74, 222, 128, 0); }
+    0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); }
+    50% { box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
 }
 
 /* --- Chat control bar --- */
@@ -1022,12 +1395,12 @@ AI_CHAT_CSS = """
     align-items: center;
     justify-content: space-between;
     padding: 0.5rem 1rem;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: var(--ai-bg-secondary);
+    border: 1px solid var(--ai-border);
     border-radius: 12px;
     margin-bottom: 0.8rem;
     font-size: 0.78rem;
-    color: var(--muted, rgba(255,255,255,0.5));
+    color: var(--ai-muted);
 }
 .chat-control-bar .chat-id-badge {
     font-family: 'Courier New', monospace;
@@ -1039,7 +1412,7 @@ AI_CHAT_CSS = """
 .empty-state {
     text-align: center;
     padding: 3rem 2rem;
-    color: var(--muted, rgba(255,255,255,0.4));
+    color: var(--ai-muted);
 }
 .empty-state .empty-icon {
     font-size: 3.5rem;
@@ -1052,7 +1425,7 @@ AI_CHAT_CSS = """
     50% { transform: translateY(-8px); }
 }
 .empty-state h3 {
-    color: var(--text-color, #e2e8f0);
+    color: var(--ai-text);
     font-weight: 600;
     margin: 0 0 0.5rem 0;
 }
@@ -1369,14 +1742,6 @@ def render_ai_chat_tab(excel_data: Dict[str, pd.DataFrame] = None):
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Model Advisor ──
-    with st.expander("🧠 **Model Guide: Which one strictly to use?**"):
-        st.markdown("""
-        *   ⚡ **Gemini 2.0 Flash** (Recommended): Fastest, most stable, best for 90% of queries.
-        *   🧠 **Gemini 2.5 Pro**: Advanced reasoning, better for complex lineage tracing. *May be slower.*
-        *   🚀 **Gemini Flash Latest**: Experimental speed. Use if others fail.
-        """)
-
     # ── Check if data is available ──
     # Also check for output file if no data in session
     if not excel_data or len(excel_data) == 0:
@@ -1483,16 +1848,378 @@ def render_ai_chat_tab(excel_data: Dict[str, pd.DataFrame] = None):
 
     st.markdown("---")
 
-    # ── Preset Quick Questions ──
+    # ── Smart Pipeline Filter ──
+    all_pipeline_names = []
+    pipeline_df = None
+    if "PipelineAnalysis" in ctx_builder.sheets and "Pipeline" in ctx_builder.sheets["PipelineAnalysis"].columns:
+        pipeline_df = ctx_builder.sheets["PipelineAnalysis"]
+        all_pipeline_names = sorted(pipeline_df["Pipeline"].dropna().unique().tolist())
+    elif "Pipelines" in ctx_builder.sheets and "Pipeline" in ctx_builder.sheets["Pipelines"].columns:
+        pipeline_df = ctx_builder.sheets["Pipelines"]
+        all_pipeline_names = sorted(pipeline_df["Pipeline"].dropna().unique().tolist())
+
+    current_filter = st.session_state.get("ai_pipeline_filter", [])
+    filter_count = len(current_filter)
+    filter_label = f"🎯 {filter_count} selected" if filter_count > 0 else "All"
+
+    if all_pipeline_names:
+        with st.expander(f"🔍 **Smart Pipeline Filter** — {len(all_pipeline_names)} pipelines available ({filter_label})", expanded=False):
+
+            # ── Quick-Filter Tabs ──
+            filter_tab1, filter_tab2, filter_tab3 = st.tabs(["📂 By Folder", "⚡ By Complexity", "📋 Manual Select"])
+
+            # ── TAB 1: By Folder ──
+            with filter_tab1:
+                if pipeline_df is not None and "Folder" in pipeline_df.columns:
+                    folders = pipeline_df["Folder"].fillna("(Root / No Folder)").unique().tolist()
+                    folders = sorted(folders)
+                    st.caption(f"**{len(folders)}** folders detected. Click any folder to select all its pipelines.")
+                    
+                    # Folder buttons in a grid
+                    fcol1, fcol2 = st.columns(2)
+                    for fi, folder in enumerate(folders):
+                        col = fcol1 if fi % 2 == 0 else fcol2
+                        with col:
+                            mask = pipeline_df["Folder"].fillna("(Root / No Folder)") == folder
+                            folder_pipelines = pipeline_df.loc[mask, "Pipeline"].tolist()
+                            count = len(folder_pipelines)
+                            if st.button(f"📁 {folder} ({count})", key=f"folder_{fi}", use_container_width=True):
+                                st.session_state.ai_pipeline_filter = folder_pipelines
+                                st.rerun()
+                else:
+                    st.info("No `Folder` column found in PipelineAnalysis sheet.")
+
+            # ── TAB 2: By Complexity ──
+            with filter_tab2:
+                if pipeline_df is not None and "Complexity" in pipeline_df.columns:
+                    st.caption("Filter pipelines by complexity level.")
+                    complexity_levels = sorted(pipeline_df["Complexity"].dropna().unique().tolist())
+                    
+                    ccol1, ccol2 = st.columns(2)
+                    for ci, level in enumerate(complexity_levels):
+                        col = ccol1 if ci % 2 == 0 else ccol2
+                        with col:
+                            mask = pipeline_df["Complexity"] == level
+                            level_pipelines = pipeline_df.loc[mask, "Pipeline"].tolist()
+                            count = len(level_pipelines)
+                            icon = {"Simple": "🟢", "Medium": "🟡", "Complex": "🟠", "Critical": "🔴"}.get(str(level), "⚪")
+                            if st.button(f"{icon} {level} ({count})", key=f"complexity_{ci}", use_container_width=True):
+                                st.session_state.ai_pipeline_filter = level_pipelines
+                                st.rerun()
+                    
+                    # Also show ImpactLevel if available
+                    if "ImpactLevel" in pipeline_df.columns:
+                        st.markdown("---")
+                        st.caption("Or filter by **Impact Level**:")
+                        impact_levels = sorted(pipeline_df["ImpactLevel"].dropna().unique().tolist())
+                        icol1, icol2 = st.columns(2)
+                        for ii, impact in enumerate(impact_levels):
+                            col = icol1 if ii % 2 == 0 else icol2
+                            with col:
+                                mask = pipeline_df["ImpactLevel"] == impact
+                                impact_pipelines = pipeline_df.loc[mask, "Pipeline"].tolist()
+                                count = len(impact_pipelines)
+                                icon = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "🟢"}.get(str(impact).upper(), "⚪")
+                                if st.button(f"{icon} {impact} ({count})", key=f"impact_{ii}", use_container_width=True):
+                                    st.session_state.ai_pipeline_filter = impact_pipelines
+                                    st.rerun()
+                else:
+                    st.info("No `Complexity` column found in PipelineAnalysis sheet.")
+
+            # ── TAB 3: Manual Select ──
+            with filter_tab3:
+                mcol1, mcol2 = st.columns(2)
+                with mcol1:
+                    if st.button("📋 Select All", key="filter_select_all", use_container_width=True):
+                        st.session_state.ai_pipeline_filter = all_pipeline_names
+                        st.rerun()
+                with mcol2:
+                    if st.button("🧹 Clear All", key="filter_clear_all", use_container_width=True):
+                        st.session_state.ai_pipeline_filter = []
+                        st.rerun()
+                
+                selected_pipelines = st.multiselect(
+                    "Select Pipelines:",
+                    options=all_pipeline_names,
+                    default=st.session_state.get("ai_pipeline_filter", []),
+                    key="pipeline_multiselect",
+                    placeholder="All Pipelines (no filter)",
+                )
+                st.session_state.ai_pipeline_filter = selected_pipelines
+
+            # ── Filter Status Bar ──
+            current_sel = st.session_state.get("ai_pipeline_filter", [])
+            if current_sel:
+                # Estimate token reduction
+                if "Activities" in ctx_builder.sheets and "Pipeline" in ctx_builder.sheets["Activities"].columns:
+                    total_act = len(ctx_builder.sheets["Activities"])
+                    filtered_act = len(ctx_builder.sheets["Activities"][ctx_builder.sheets["Activities"]["Pipeline"].isin(current_sel)])
+                    reduction_pct = int((1 - filtered_act / max(total_act, 1)) * 100)
+                    est_filtered_tokens = (ctx_builder.total_chars - (ctx_builder.sheet_info.get("Activities", {}).get("chars", 0))) // 4 + (filtered_act * 300 // 4)
+                    
+                    recommended_model = "Any model" if est_filtered_tokens < 30000 else "Flash models" if est_filtered_tokens < 900000 else "Gemini 2.5 Pro"
+                    
+                    st.success(
+                        f"🎯 **{len(current_sel)}** pipeline(s) selected • "
+                        f"**{filtered_act}** activities (of {total_act}) • "
+                        f"~{reduction_pct}% token reduction • "
+                        f"Recommended: **{recommended_model}**"
+                    )
+                else:
+                    st.info(f"🎯 **{len(current_sel)}** pipeline(s) selected.")
+            else:
+                st.caption("💡 No filter active — AI will process **all** pipelines. Use the tabs above to narrow focus.")
+
+    # ── Secondary Entity Filters (DataFlow, Trigger, LinkedService) ──
+    entity_filter_col1, entity_filter_col2 = st.columns(2)
+    
+    # DataFlow Filter
+    with entity_filter_col1:
+        all_dataflow_names = []
+        if "DataFlows" in ctx_builder.sheets and "DataFlow" in ctx_builder.sheets["DataFlows"].columns:
+            all_dataflow_names = sorted(ctx_builder.sheets["DataFlows"]["DataFlow"].dropna().unique().tolist())
+        
+        if all_dataflow_names:
+            df_filter = st.multiselect(
+                f"🔄 DataFlow Filter ({len(all_dataflow_names)})",
+                options=all_dataflow_names,
+                default=st.session_state.get("ai_dataflow_filter", []),
+                key="dataflow_multiselect",
+                placeholder="All DataFlows (no filter)",
+            )
+            st.session_state.ai_dataflow_filter = df_filter
+    
+    # Trigger Filter
+    with entity_filter_col2:
+        all_trigger_names = []
+        if "Triggers" in ctx_builder.sheets and "Trigger" in ctx_builder.sheets["Triggers"].columns:
+            all_trigger_names = sorted(ctx_builder.sheets["Triggers"]["Trigger"].dropna().unique().tolist())
+        
+        if all_trigger_names:
+            trig_filter = st.multiselect(
+                f"🗓️ Trigger Filter ({len(all_trigger_names)})",
+                options=all_trigger_names,
+                default=st.session_state.get("ai_trigger_filter", []),
+                key="trigger_multiselect",
+                placeholder="All Triggers (no filter)",
+            )
+            st.session_state.ai_trigger_filter = trig_filter
+
+    # ── Preset Quick Questions (Context-Aware with Filter Guidance) ──
     no_history = len(st.session_state.ai_chat_history) == 0
+    active_filter = st.session_state.get("ai_pipeline_filter", [])
+    active_df_filter = st.session_state.get("ai_dataflow_filter", [])
+    active_trig_filter = st.session_state.get("ai_trigger_filter", [])
+    
     with st.expander("💡 **Quick Questions** — click any to ask the AI", expanded=no_history):
+        # Show active filter status
+        filter_status = []
+        if active_filter:
+            filter_status.append(f"🔍 **{len(active_filter)}** pipeline(s)")
+        if active_df_filter:
+            filter_status.append(f"🔄 **{len(active_df_filter)}** dataflow(s)")
+        if active_trig_filter:
+            filter_status.append(f"🗓️ **{len(active_trig_filter)}** trigger(s)")
+        if filter_status:
+            st.success(f"🎯 Active Filters: {' • '.join(filter_status)} — questions will auto-scope to these entities.")
+        else:
+            st.caption("💡 No filters active. Set filters above to narrow AI focus. See filter guide below for recommendations.")
+        
         col1, col2 = st.columns(2)
         for i, (label, question) in enumerate(PRESET_QUESTIONS):
             col = col1 if i % 2 == 0 else col2
             with col:
-                if st.button(label, key=f"preset_{i}", width='stretch'):
-                    st.session_state.pending_question = question
+                # Get filter guide for this preset
+                guide = PRESET_FILTER_GUIDE.get(label, {})
+                rec_filters = guide.get("filters", [])
+                hint = guide.get("hint", "")
+                
+                # Build tooltip with filter recommendation
+                tooltip = hint
+                if rec_filters:
+                    tooltip += f" | Best with: {', '.join(rec_filters)}"
+                
+                if st.button(label, key=f"preset_{i}", use_container_width=True, help=tooltip):
+                    # Context-aware: inject all active entity filters into the question
+                    final_question = question
+                    filter_instructions = []
+                    if active_filter and len(active_filter) <= 20:
+                        filter_instructions.append(
+                            f"Focus ONLY on these {len(active_filter)} pipeline(s): {', '.join(active_filter)}.")
+                    if active_df_filter and len(active_df_filter) <= 20:
+                        filter_instructions.append(
+                            f"Focus ONLY on these {len(active_df_filter)} dataflow(s): {', '.join(active_df_filter)}.")
+                    if active_trig_filter and len(active_trig_filter) <= 20:
+                        filter_instructions.append(
+                            f"Focus ONLY on these {len(active_trig_filter)} trigger(s): {', '.join(active_trig_filter)}.")
+                    if filter_instructions:
+                        final_question += "\n\n⚠️ IMPORTANT: " + " ".join(filter_instructions) + " Do not include data from other entities."
+                    st.session_state.pending_question = final_question
                     st.rerun()
+                
+                # Show filter recommendation as small caption
+                if rec_filters:
+                    active_match = []
+                    if "🔍 Pipeline" in rec_filters and active_filter:
+                        active_match.append("✅ Pipeline")
+                    elif "🔍 Pipeline" in rec_filters:
+                        active_match.append("🔍 Pipeline")
+                    if "🔄 DataFlow" in rec_filters and active_df_filter:
+                        active_match.append("✅ DataFlow")
+                    elif "🔄 DataFlow" in rec_filters:
+                        active_match.append("🔄 DataFlow")
+                    if "🗓️ Trigger" in rec_filters and active_trig_filter:
+                        active_match.append("✅ Trigger")
+                    elif "🗓️ Trigger" in rec_filters:
+                        active_match.append("🗓️ Trigger")
+                    st.caption(f"Best with: {' '.join(active_match)}")
+        
+        # Filter Usage Guide
+        st.markdown("---")
+        st.markdown("**📖 Which filter for which question?**")
+        guide_data = []
+        for label, _ in PRESET_QUESTIONS:
+            g = PRESET_FILTER_GUIDE.get(label, {})
+            filters_str = ", ".join(g.get("filters", [])) or "None needed"
+            guide_data.append(f"| {label} | {filters_str} | {g.get('sheets', 'N/A')} |")
+        st.markdown(
+            "| Preset | Recommended Filters | Sheets Cross-Referenced |\n"
+            "|---|---|---|\n" + "\n".join(guide_data)
+        )
+
+    # ── Custom Question Editor with AI Refiner ──
+    with st.expander("✏️ **Custom Question Editor** — write, refine & save your own prompts", expanded=False):
+        st.caption("Write a rough idea → click **✨ Refine with AI** → get an expert-level prompt automatically!")
+        
+        # Preset copy buttons
+        st.markdown("**📋 Load a preset to edit:**")
+        preset_cols = st.columns(4)
+        for pi, (plabel, pquestion) in enumerate(PRESET_QUESTIONS[:8]):
+            with preset_cols[pi % 4]:
+                if st.button(plabel.split(" ", 1)[0], key=f"copy_preset_{pi}", use_container_width=True, help=f"Load '{plabel}' into editor"):
+                    st.session_state.custom_question_text = pquestion
+                    st.rerun()
+        
+        st.markdown("---")
+        
+        custom_text = st.text_area(
+            "Your prompt (rough or polished):",
+            value=st.session_state.get("custom_question_text", ""),
+            height=200,
+            key="custom_question_area",
+            placeholder="Write your idea here — it can be rough!\n\nExample: 'show me all pipelines that load data from snowflake to azure sql'\n\nThen click ✨ Refine with AI to convert it into an expert-level prompt.",
+        )
+        st.session_state.custom_question_text = custom_text
+        
+        # Action buttons row
+        btn_col1, btn_col2, btn_col3, btn_col4 = st.columns([2, 2, 1, 1])
+        with btn_col1:
+            if st.button("🚀 **Send**", key="send_custom", use_container_width=True, type="primary", disabled=not custom_text.strip()):
+                final_q = custom_text.strip()
+                filter_instructions = []
+                if active_filter and len(active_filter) <= 20:
+                    filter_instructions.append(
+                        f"Focus ONLY on these {len(active_filter)} pipeline(s): {', '.join(active_filter)}.")
+                if active_df_filter and len(active_df_filter) <= 20:
+                    filter_instructions.append(
+                        f"Focus ONLY on these {len(active_df_filter)} dataflow(s): {', '.join(active_df_filter)}.")
+                if active_trig_filter and len(active_trig_filter) <= 20:
+                    filter_instructions.append(
+                        f"Focus ONLY on these {len(active_trig_filter)} trigger(s): {', '.join(active_trig_filter)}.")
+                if filter_instructions:
+                    final_q += "\n\n⚠️ IMPORTANT: " + " ".join(filter_instructions) + " Do not include data from other entities."
+                st.session_state.pending_question = final_q
+                st.rerun()
+        with btn_col2:
+            refine_disabled = not custom_text.strip() or len(custom_text.strip()) < 5
+            if st.button("✨ **Refine with AI**", key="refine_custom", use_container_width=True, disabled=refine_disabled):
+                with st.spinner("🧠 AI is refining your prompt..."):
+                    # Use a lightweight Gemini call to refine the prompt
+                    refine_meta_prompt = f"""You are an elite Prompt Engineer specializing in Azure Data Factory (ADF) analysis.
+
+Your task is to take a user's rough query and convert it into a highly professional, expert-level prompt that will be sent to a data analysis AI. The AI will be reading Excel reports of the ADF factory.
+
+User's rough query:
+---
+{custom_text.strip()}
+---
+
+Context available to the analysis AI:
+- Available data sheets: {', '.join(ctx_builder.sheets.keys())}
+- Key columns in 'Activities': Pipeline, Activity, ActivityType, SourceTable, SinkTable, SourceLinkedService, SinkLinkedService, DataFlow, ValuesInfo, ExecutionStage
+- Key columns in 'Datasets': Dataset, LinkedService, Type
+- Key columns in 'DataFlows': DataFlow, SourceTables, SinkTables
+
+### Required Prompt Structure:
+The refined prompt you generate MUST follow this structure:
+1. **Role Definition:** Start with "You are an expert ADF Analyst."
+2. **Data Sources:** Explicitly declare which exact sheets and columns the AI must read to answer the query (use exact names from the list above).
+3. **Execution Logic (Step-by-Step):** If the query requires joining data (e.g., finding a LinkedService for a Dataset), write explicit, numbered step-by-step instructions on how the AI must join the sheets.
+4. **Output Format:** Mandate a strict Markdown table output. Define the exact columns the table should have. Add an example row if helpful.
+5. **Anti-Hallucination:** Add a strict instruction: "Only use data explicitly present in the provided sheets. Do not guess or infer."
+
+Write beautifully formatted instructions.
+Return ONLY the final refined prompt text. Do NOT wrap it in markdown code blocks (```). Do NOT include any preamble like 'Here is your prompt:'. Just output the raw prompt text."""
+
+                    client = GeminiClient(key_mgr)
+                    refined = client.call_api(
+                        refine_meta_prompt,
+                        model=st.session_state.get("ai_model", DEFAULT_MODEL),
+                    )
+                    
+                    if refined and not refined.startswith("❌"):
+                        st.session_state.custom_question_text = refined
+                        st.success("✅ Prompt refined! Review it above, edit if needed, then click 🚀 Send.")
+                        st.rerun()
+                    else:
+                        st.error(f"Refinement failed: {refined}")
+        with btn_col3:
+            # Save current prompt
+            if st.button("💾 Save", key="save_custom", use_container_width=True, disabled=not custom_text.strip()):
+                saved = st.session_state.get("ai_saved_prompts", [])
+                label = custom_text.strip()[:60] + ("..." if len(custom_text.strip()) > 60 else "")
+                saved.append({"label": label, "text": custom_text.strip()})
+                st.session_state.ai_saved_prompts = saved[-10:]  # Keep last 10
+                st.success(f"💾 Saved! ({len(st.session_state.ai_saved_prompts)} prompts)")
+        with btn_col4:
+            if st.button("🗑️ Clear", key="clear_custom", use_container_width=True):
+                st.session_state.custom_question_text = ""
+                st.rerun()
+        
+        # Show saved prompts if any
+        saved_prompts = st.session_state.get("ai_saved_prompts", [])
+        if saved_prompts:
+            st.markdown("---")
+            st.markdown(f"**💾 Saved Prompts** ({len(saved_prompts)}):")
+            for si, sp in enumerate(saved_prompts):
+                scol1, scol2, scol3 = st.columns([5, 1, 1])
+                with scol1:
+                    st.caption(f"📝 {sp['label']}")
+                with scol2:
+                    if st.button("Load", key=f"load_saved_{si}", use_container_width=True):
+                        st.session_state.custom_question_text = sp["text"]
+                        st.rerun()
+                with scol3:
+                    if st.button("🗑️", key=f"del_saved_{si}", use_container_width=True):
+                        st.session_state.ai_saved_prompts.pop(si)
+                        st.rerun()
+
+    # ── Model Selection Guide ──
+    with st.expander("🧠 **Model Guide: Which one strictly to use?**", expanded=False):
+        st.markdown("""
+        To avoid **429 Exceeded Quota** or **Context Truncation** errors, strictly follow this guide:
+
+        | 🎯 Your Goal | 🏆 Recommended Model | ⏱️ Why? |
+        |---|---|---|
+        | **Table Lineage across ALL Pipelines** | **Gemini 2.5 Flash** | **Required for Free Users!** The 1-Million TPM free limit can ingest the massive 170k+ token `Activities` sheet without failing. |
+        | **General Counts / Factory Overview** | **Gemini 2.0 Flash** | Fastest response. Stable and perfect for summarizing `Statistics` and `PipelineAnalysis`. |
+        | **Column Lineage / Complex Debugging** | **Gemini 2.5 Pro** | Highest reasoning capability for tracing intricate data flows. |
+        | **Quick Q&A on Errors / Triggers** | **Gemini 1.5 Pro** | Balances great reasoning with large context. |
+
+        🛑 **CRITICAL WARNING FOR FREE TIER USERS:** 
+        If you use **Gemini Pro** for massive Table Lineage queries, Google will strictly block it with HTTP 429 because the Free Tier for 'Pro' is capped at **32,000 Tokens/Min**. 
+        You **MUST** use a **Flash** model (1,000,000 Tokens/Min limit) for these queries unless you have a paid API key!
+        """)
 
     # ── Chat Control Bar ──
     tokens_used = st.session_state.get("ai_total_tokens_used", 0)
@@ -1548,13 +2275,63 @@ def render_ai_chat_tab(excel_data: Dict[str, pd.DataFrame] = None):
         with st.chat_message("assistant", avatar="🤖"):
             with st.status("🧠 Analyzing your ADF Factory...", expanded=True) as status:
                 status.write("📂 Building context from Excel sheets...")
-                data_context, est_tokens, warnings = ctx_builder.get_context_for_question(active_question)
+                model = st.session_state.get("ai_model", DEFAULT_MODEL)
+                pipeline_filter = st.session_state.get("ai_pipeline_filter", []) or None
+                df_filter = st.session_state.get("ai_dataflow_filter", []) or None
+                trig_filter = st.session_state.get("ai_trigger_filter", []) or None
+                data_context, est_tokens, warnings = ctx_builder.get_context_for_question(
+                    active_question, model,
+                    pipeline_filter=pipeline_filter,
+                    dataflow_filter=df_filter,
+                    trigger_filter=trig_filter,
+                )
+                
+                active_filters_msg = []
+                if pipeline_filter:
+                    active_filters_msg.append(f"{len(pipeline_filter)} pipeline(s)")
+                if df_filter:
+                    active_filters_msg.append(f"{len(df_filter)} dataflow(s)")
+                if trig_filter:
+                    active_filters_msg.append(f"{len(trig_filter)} trigger(s)")
+                if active_filters_msg:
+                    status.write(f"🎯 Filter active: {', '.join(active_filters_msg)} selected")
                 
                 for w in warnings:
                     st.warning(w)
                 
-                status.write(f"📡 Sending request (~{est_tokens:,} tokens) to AI...")
+                # Pre-flight check: warn if Pro model + large context on free tier
+                model_cfg = AVAILABLE_MODELS.get(model, AVAILABLE_MODELS[DEFAULT_MODEL])
+                is_pro = "pro" in model.lower()
+                if is_pro and est_tokens > 30000:
+                    st.warning(
+                        f"⚠️ **Free-Tier TPM Warning:** Your query is ~{est_tokens:,} tokens. "
+                        f"Gemini Pro's free tier is capped at 32,000 TPM. "
+                        f"Consider switching to **Gemini 2.5 Flash** (1M TPM limit) for reliability."
+                    )
+                
+                status.write(f"📡 Sending request (~{est_tokens:,} tokens) to {model_cfg.display_name}...")
                 response = _process_question_v2(active_question, ctx_builder, data_context, est_tokens)
+                
+                # ── Auto-fallback: if Pro model hit 429, retry with Flash ──
+                if response and "API Quota Exceeded (429" in response and "pro" in model.lower():
+                    fallback_model = "gemini-2.5-flash"
+                    fallback_cfg = AVAILABLE_MODELS[fallback_model]
+                    status.write(
+                        f"⚡ Pro model hit 32K TPM limit. Auto-switching to "
+                        f"{fallback_cfg.icon} {fallback_cfg.display_name} (1M TPM)..."
+                    )
+                    # Temporarily switch model for this request
+                    old_model = st.session_state.ai_model
+                    st.session_state.ai_model = fallback_model
+                    response = _process_question_v2(active_question, ctx_builder, data_context, est_tokens)
+                    st.session_state.ai_model = old_model  # Restore user's choice
+                    
+                    if response and not response.startswith("❌"):
+                        response = (
+                            f"> ⚡ **Auto-Fallback:** Pro model exceeded free tier (32K TPM). "
+                            f"This response was generated by **{fallback_cfg.display_name}** instead.\n\n"
+                            + response
+                        )
                 
                 status.update(label="✅ Analysis complete!", state="complete")
             
@@ -1597,7 +2374,7 @@ REMINDER: At the end, mention which sheets you used to answer.
 
     # History summary to prevent token bloat
     api_history = st.session_state.get("ai_api_history", [])
-    max_history = 6
+    max_history = 4  # Tighter cap to prevent context overflow on follow-ups
     if len(api_history) > max_history:
         api_history = api_history[-max_history:]
     
