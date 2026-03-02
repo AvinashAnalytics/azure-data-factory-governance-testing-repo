@@ -220,6 +220,17 @@ def load_custom_css(theme: str = "midnight"):
             "card_border": "rgba(255, 255, 255, 0.08)",
             "value_grad_from": "#34d399", "value_grad_to": "#6ee7b7",
         },
+        "ice_white": {
+            "bg_1": "#f8fafc", "bg_2": "#ffffff",
+            "surface": "rgba(255, 255, 255, 0.85)",
+            "primary": "#3b82f6", "secondary": "#8b5cf6",
+            "primary_rgb": "59, 130, 246", "secondary_rgb": "139, 92, 246",
+            "text": "#1e293b", "text_muted": "rgba(15, 23, 42, 0.65)",
+            "glow_1": "rgba(59, 130, 246, 0.12)", "glow_2": "rgba(139, 92, 246, 0.10)",
+            "header_from": "rgba(240, 245, 255, 0.9)", "header_to": "rgba(245, 240, 255, 0.9)",
+            "card_border": "rgba(0, 0, 0, 0.08)",
+            "value_grad_from": "#2563eb", "value_grad_to": "#7c3aed",
+        },
     }
     t = themes.get(theme, themes["midnight"])
 
@@ -519,14 +530,20 @@ def load_custom_css(theme: str = "midnight"):
 # ═══════════════════════════════════════════════════════════════════════════
 
 # Premium Chart Template (minimal to avoid keyword conflicts)
+# Dynamic text color based on selected theme
+_active = st.session_state.get('selected_theme', 'midnight')
+_chart_text_color = '#1e293b' if _active == 'ice_white' else '#e2e8f0'
+_hover_bg = 'rgba(255, 255, 255, 0.95)' if _active == 'ice_white' else 'rgba(30, 41, 59, 0.95)'
+_hover_text = '#1e293b' if _active == 'ice_white' else '#e2e8f0'
+
 PREMIUM_CHART_TEMPLATE = {
     'layout': {
         'hoverlabel': {
-            'bgcolor': 'rgba(255, 255, 255, 0.95)',
-            'font': {'size': 13, 'family': 'Inter', 'color': '#1e293b'},
+            'bgcolor': _hover_bg,
+            'font': {'size': 13, 'family': 'Inter', 'color': _hover_text},
             'bordercolor': 'rgba(102, 126, 234, 0.3)'
         },
-        'font': {'family': 'Inter', 'color': PremiumColors.DARK_TEXT},
+        'font': {'family': 'Inter', 'color': _chart_text_color},
         'paper_bgcolor': 'rgba(0,0,0,0)',
         'plot_bgcolor': 'rgba(0,0,0,0)',
     }
@@ -1174,6 +1191,7 @@ class ADF_Dashboard:
             "midnight": "🌊 Midnight",
             "obsidian": "🌑 Obsidian",
             "forest":   "🌿 Forest",
+            "ice_white": "❄️ Ice White",
         }
         # Migrate legacy theme values from previous sessions
         current = st.session_state.get("selected_theme", "midnight")
@@ -1258,6 +1276,7 @@ class ADF_Dashboard:
                     "midnight": ("#667eea", "#0a0a1a"),
                     "obsidian": ("#a78bfa", "#0a0a0a"),
                     "forest": ("#34d399", "#0a1a0f"),
+                    "ice_white": ("#3b82f6", "#ffffff"),
                 }
                 defaults = theme_defaults.get(current, ("#667eea", "#0a0a1a"))
                 st.session_state["user_accent_color"] = defaults[0]
