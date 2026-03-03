@@ -3923,6 +3923,19 @@ class UltimateEnterpriseADFAnalyzer:
             except Exception:
                 pass
             
+            # Extract sqlReaderStoredProcedureName from Copy source (SPs used as source readers)
+            sp_name_raw = source.get('sqlReaderStoredProcedureName')
+            if sp_name_raw and not parsed.stored_procedure:
+                sp_text = self._extract_value(sp_name_raw).strip('[')
+                parsed.stored_procedure = sp_text
+                source_settings.append(f"SourceSP:{sp_text[:40]}")
+                # Build EXEC SQL from SP params
+                sp_params = source.get('storedProcedureParameters', {})
+                if sp_params and isinstance(sp_params, dict):
+                    param_strs = [f"@{k}" for k in list(sp_params.keys())[:10]]
+                    if not parsed.sql:
+                        parsed.sql = f"EXEC {sp_text} {', '.join(param_strs)}"
+            
             # ─────────────────────────────────────────────────────────────
             # SQL Partition Options (for parallel reads from SQL sources)
             # ─────────────────────────────────────────────────────────────
@@ -4266,12 +4279,26 @@ class UltimateEnterpriseADFAnalyzer:
         first_row = type_props.get('firstRowOnly', True)
         parsed.values_info = f"FirstRowOnly: {first_row}"
         
-        # Query
+        # Query or Stored Procedure from source
         source = type_props.get('source', {})
         if isinstance(source, dict):
             query = source.get('query') or source.get('sqlReaderQuery')
             if query:
                 parsed.sql = self._extract_value(query)[:Config.MAX_SQL_LENGTH]
+            
+            # Extract sqlReaderStoredProcedureName (Lookup activities can call SPs via source)
+            sp_name_raw = source.get('sqlReaderStoredProcedureName')
+            if sp_name_raw and not parsed.stored_procedure:
+                sp_text = self._extract_value(sp_name_raw).strip('[')
+                parsed.stored_procedure = sp_text
+                parsed.role = f"Lookup SP: {sp_text[:30]}"
+                # Build EXEC SQL from SP params
+                sp_params = source.get('storedProcedureParameters', {})
+                if sp_params and isinstance(sp_params, dict):
+                    param_strs = [f"@{k}" for k in list(sp_params.keys())[:10]]
+                    parsed.sql = f"EXEC {sp_text} {', '.join(param_strs)}"
+                elif not parsed.sql:
+                    parsed.sql = f"EXEC {sp_text}"
     
     def _parse_web_activity(self, parsed: ParsedActivity, type_props: dict):
         """Parse Web activity"""
