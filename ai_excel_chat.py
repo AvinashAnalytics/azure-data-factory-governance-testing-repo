@@ -257,7 +257,7 @@ class GeminiClient:
                     
                     if "quota" in error_msg or "exceeded" in error_msg:
                         # All free-tier keys share the same quota — rotating is futile
-                        is_pro = "pro" in str(model).lower()
+                        is_pro = "pro" in str(self.model).lower()
                         if is_pro:
                             return f"❌ **API Quota Exceeded (429 HTTP)**. Gemini Pro's free tier is strictly limited to **32,000** Tokens-Per-Minute. Your query was likely too large for this tier. Please switch to **Gemini 2.5 Flash** (1-Million token limit) or use a paid key."
                         else:
@@ -590,11 +590,20 @@ RESPONSE FORMAT:
 
     def build_tier1_context(self, pipeline_filter: List[str] = None) -> str:
         """Build COMPLETE context from critical sheets — NO truncation.
-        If pipeline_filter is provided, filter sheets that have a Pipeline column."""
+        If pipeline_filter is provided, filter sheets that have a Pipeline column.
+        Sheets without Pipeline column are cascade-filtered by related entity names."""
         context_parts = []
 
         # Sheets that can be filtered by Pipeline column
         PIPELINE_FILTERABLE = {"PipelineAnalysis", "DataLineage", "DataFlowLineage", "ImpactAnalysis", "Pipelines"}
+
+        # Pre-compute cascaded DataFlow names for sheets without Pipeline column
+        cascaded_dataflows = set()
+        if pipeline_filter and "Activities" in self.sheets:
+            acts = self.sheets["Activities"]
+            if "Pipeline" in acts.columns and "DataFlow" in acts.columns:
+                filtered_acts = acts[acts["Pipeline"].isin(pipeline_filter)]
+                cascaded_dataflows = set(filtered_acts["DataFlow"].dropna().unique())
 
         for sheet_name in TIER1_SHEETS:
             if sheet_name not in self.sheets:
@@ -603,15 +612,21 @@ RESPONSE FORMAT:
             if df.empty:
                 continue
 
+            filter_tag = ""
             # Apply pipeline filter if specified and sheet supports it
-            if pipeline_filter and sheet_name in PIPELINE_FILTERABLE and "Pipeline" in df.columns:
-                df = df[df["Pipeline"].isin(pipeline_filter)]
+            if pipeline_filter and sheet_name in PIPELINE_FILTERABLE:
+                if "Pipeline" in df.columns:
+                    df = df[df["Pipeline"].isin(pipeline_filter)]
+                    filter_tag = f" [FILTERED: {len(pipeline_filter)} pipelines]"
+                elif "DataFlow" in df.columns and cascaded_dataflows:
+                    # Cascade-filter by DataFlow name (e.g. DataFlowLineage)
+                    df = df[df["DataFlow"].isin(cascaded_dataflows)]
+                    filter_tag = f" [CASCADED: {len(cascaded_dataflows)} dataflows from {len(pipeline_filter)} pipelines]"
                 if df.empty:
                     continue
 
             csv_data = df.to_csv(index=False)
             est_tokens = len(csv_data) // 4
-            filter_tag = f" [FILTERED: {len(pipeline_filter)} pipelines]" if pipeline_filter and sheet_name in PIPELINE_FILTERABLE else ""
             context_parts.append(
                 f"\n### 📋 Sheet: {sheet_name}{filter_tag} "
                 f"({len(df)} rows × {len(df.columns)} cols, ~{est_tokens:,} tokens)\n"
@@ -686,13 +701,17 @@ RESPONSE FORMAT:
             if keyword in q_lower:
                 matched_sheets.update(sheet_names)
 
-        # Direct sheet name matching
+        # Direct sheet name matching (exclude massive sheets handled by Tier 3)
+        TIER3_SHEETS = {"Activities", "ActivityExecutionOrder"}
         for sheet_name in self.sheets:
+            if sheet_name in TIER3_SHEETS:
+                continue  # These are handled with smart filtering in build_tier3_context
             if sheet_name.lower() in q_lower:
                 matched_sheets.add(sheet_name)
 
-        # Remove Tier 1 sheets (already included)
+        # Remove Tier 1 sheets (already included) AND Tier 3 sheets (handled separately)
         matched_sheets -= set(TIER1_SHEETS)
+        matched_sheets -= TIER3_SHEETS
 
         if not matched_sheets:
             return ""
@@ -938,6 +957,30 @@ RESPONSE FORMAT:
         # Include system prompt + history estimate for a more accurate token count
         system_len = len(self.build_system_context()) if hasattr(self, 'build_system_context') else 3000
         est_tokens = (len(full_context) + system_len) // 4
+        
+        # ── DEBUG: Write token breakdown to file ──
+        try:
+            with open("debug_context.log", "w", encoding="utf-8") as dbg:
+                dbg.write(f"pipeline_filter: {pipeline_filter}\n")
+                dbg.write(f"question keywords first 80 chars: {question[:80]}\n")
+                dbg.write(f"model: {model}\n")
+                dbg.write(f"tier1 chars: {len(tier1):,}  tokens: {len(tier1)//4:,}\n")
+                dbg.write(f"tier2 chars: {len(tier2):,}  tokens: {len(tier2)//4:,}\n")
+                dbg.write(f"tier3 chars: {len(tier3):,}  tokens: {len(tier3)//4:,}\n")
+                dbg.write(f"system_len: {system_len:,}\n")
+                dbg.write(f"full_context chars: {len(full_context):,}\n")
+                dbg.write(f"est_tokens: {est_tokens:,}\n")
+                # Show Activities sheet info
+                if "Activities" in self.sheets:
+                    act_df = self.sheets["Activities"]
+                    dbg.write(f"Activities sheet: {len(act_df)} rows, cols={list(act_df.columns)[:10]}\n")
+                    dbg.write(f"  Has 'Pipeline' col: {'Pipeline' in act_df.columns}\n")
+                    if pipeline_filter and 'Pipeline' in act_df.columns:
+                        filtered = act_df[act_df['Pipeline'].isin(pipeline_filter)]
+                        dbg.write(f"  Filtered to {len(filtered)} rows (from {len(act_df)})\n")
+        except Exception:
+            pass
+        
         return full_context, est_tokens, warnings
 
     @property
@@ -1565,11 +1608,19 @@ def _get_or_rebuild_context(excel_data: Dict[str, pd.DataFrame]) -> ExcelContext
     """
     Get cached context builder or rebuild if data changed.
     ✅ FIX: Detects when new Excel is generated/loaded and rebuilds context.
+    ✅ FIX: Also invalidates when code changes (method implementations updated).
     """
-    # Quick hash of current data
+    # Quick hash of current data + code version
     keys = sorted(excel_data.keys())
     lengths = [len(excel_data[k]) for k in keys if isinstance(excel_data[k], pd.DataFrame)]
-    current_hash = hashlib.md5(f"{keys}:{lengths}".encode()).hexdigest()[:12]
+    
+    # Include code file mtime so cache invalidates when ai_excel_chat.py is edited
+    try:
+        code_mtime = str(Path(__file__).stat().st_mtime)
+    except Exception:
+        code_mtime = "unknown"
+    
+    current_hash = hashlib.md5(f"{keys}:{lengths}:{code_mtime}".encode()).hexdigest()[:12]
 
     cached = st.session_state.get("ai_context_builder")
     cached_hash = st.session_state.get("ai_context_hash", "")
