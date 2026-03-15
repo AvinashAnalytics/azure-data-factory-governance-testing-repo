@@ -77,6 +77,19 @@ CHATGPT_MODELS = {
         "gpt-5-nano", "GPT-5 Nano",
         16384, 1_000_000, "Fastest GPT-5, ultra-low cost", "💫"
     ),
+    # ── GPT-5.3 Family (Your ChatGPT Default!) ──
+    "gpt-5.3-chat-latest": ChatGPTModelConfig(
+        "gpt-5.3-chat-latest", "GPT-5.3 Instant",
+        16384, 128_000, "ChatGPT default — best everyday AI, reduced hallucination", "🌐"
+    ),
+    "gpt-5.3-codex": ChatGPTModelConfig(
+        "gpt-5.3-codex", "GPT-5.3 Codex",
+        128_000, 400_000, "Agentic coding, 400K context, 128K output", "💻"
+    ),
+    "gpt-5.3-codex-high": ChatGPTModelConfig(
+        "gpt-5.3-codex-high", "GPT-5.3 Codex High",
+        128_000, 400_000, "Deep analysis coding, max quality", "🖥️"
+    ),
     # ── GPT-4o Family (128K context) ──
     "gpt-4o": ChatGPTModelConfig(
         "gpt-4o", "GPT-4o",
@@ -123,7 +136,7 @@ CHATGPT_MODELS = {
     ),
 }
 
-DEFAULT_CHATGPT_MODEL = "gpt-4.1-mini"
+DEFAULT_CHATGPT_MODEL = "gpt-4.1"
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -198,9 +211,19 @@ class ChatGPTClient:
         payload = {
             "model": self.model,
             "messages": messages,
-            "temperature": temperature,
-            "max_tokens": model_cfg.max_output_tokens,
         }
+
+        # GPT-5.x and o-series models DON'T support temperature (only default=1)
+        # Only set temperature for older models (gpt-4o, gpt-4-turbo, gpt-3.5)
+        is_new_model = any(x in self.model for x in ["gpt-5", "o3", "o4", "o1"])
+        if not is_new_model:
+            payload["temperature"] = temperature
+
+        # OpenAI newer models use max_completion_tokens instead of max_tokens
+        if is_new_model:
+            payload["max_completion_tokens"] = model_cfg.max_output_tokens
+        else:
+            payload["max_tokens"] = model_cfg.max_output_tokens
 
         if stream:
             payload["stream"] = True
@@ -380,31 +403,73 @@ SHEET RELATIONSHIPS:
 # ════════════════════════════════════════════════════════════════════════
 
 CHATGPT_PRESET_QUESTIONS = [
-    ("🏭 Factory Overview", "Give me a comprehensive overview of this Azure Data Factory. How many pipelines, dataflows, datasets, linked services, and triggers are there? What are the main folders and categories? Show counts from the Statistics sheet."),
-    ("🔗 Table Lineage", """You are an expert ADF Table Lineage Analyst for Tiger Analytics accelerators.
+    ("📊 Factory Overview",
+     "Give me a comprehensive overview of this Azure Data Factory. How many pipelines, dataflows, datasets, linked services, and triggers are there? What are the main folders and categories? Show counts from the Statistics sheet."),
+
+    ("🔗 Pipeline Lineage",
+     "Analyze the COMPLETE data lineage from the DataLineage sheet. Show all source → sink connections. What are the main source systems and target/destination systems? Group by pipeline and show the data flow path."),
+
+    ("📈 Table Lineage",
+     """You are an expert ADF Table Lineage Analyst for Tiger Analytics accelerators.
 
 Input: Excel data from ADF Pipeline Analyzer. Focus on these sheets for extracting lineage:
+- `Activities`: Contains granular activity details including `Pipeline`, `ActivityType`, `SourceTable`, `SinkTable`, `SourceLinkedService`, `SinkLinkedService`, `ValuesInfo` (for intermediate layers), `DataFlow` (for dataflow names).
+- `DataFlows`: Contains `SinkTables` for data flows.
+- `Datasets`: Contains `LinkedService` for datasets.
+- `LinkedServices`: For linked service details.
 
-Activities: Contains granular activity details including Pipeline, ActivityType, SourceTable, SinkTable, SourceLinkedService, SinkLinkedService, ValuesInfo (for intermediate layers), DataFlow (for dataflow names).
-DataFlows: Contains SinkTables for data flows.
-Datasets: Contains LinkedService for datasets.
-LinkedServices: For linked service details.
 Task: Extract comprehensive Table-Level Lineage.
 
-Trace Lineage Path: For each pipeline, follow the data flow from source to target, identifying all intermediate steps and transformations.
+1. **Trace Lineage Path**: For each pipeline, follow the data flow from source to target, identifying all intermediate steps and transformations.
+2. **Extract Components**: For each stage in the lineage, identify the following based on the provided instructions:
+   * **Pipeline Name**: From `Activities` sheet, `Pipeline` column.
+   * **Target Table**: From `Activities` sheet, `SinkTable` column for the final data-producing activity (e.g., last execution stage). Also cross-reference with `DataFlows` sheet's `SinkTables` for the corresponding DataFlow.
+   * **Target Linked Service Connection**: From `Datasets` sheet, find the `LinkedService` associated with the Dataset that the Target Table belongs to. If not directly available, use `SinkLinkedService` from the final activity in `Activities`.
+   * **Transformation Layer (dataflow/SP)**: From `Activities` sheet, look at `DataFlow` column for 'ExecuteDataFlow' activities or `ActivityType` for 'StoredProcedure' activities, especially for the last execution stage.
+   * **Intermediate layer (Stg table/ADLS)**: From `Activities` sheet, search for 'SetVariable' or 'Set Path' activities. Extract relevant patterns like "Inbound/GlobalSC/..." from the `ValuesInfo` column by concatenating SetContainer + SetPath values.
+   * **Source Table**: From `Activities` sheet, `SourceTable` column, particularly for 'Copy Data', 'Data Flow Source', or 'Stored Procedure' activities at the initial stages.
+   * **Source Linked Service**: From `Datasets` sheet, find the `LinkedService` associated with the Dataset that the Source Table belongs to. If not directly available, use `SourceLinkedService` from the initial activity in `Activities`.
 
-Extract Components: For each stage in the lineage, identify:
-Pipeline Name, Target Table, Target Linked Service Connection, Transformation Layer (dataflow/SP), Intermediate layer (Stg table/ADLS), Source Table, Source Linked Service.
+3. **Output Format** (Markdown table):
+   | Target Table | Target Linked Service Connection | Transformation Layer (dataflow/SP) | Intermediate layer(Stg table/ADLS) | Source Table | Source Linked Service | Pipeline Name |
 
-Output Format (Markdown table): | Target Table | Target Linked Service Connection | Transformation Layer (dataflow/SP) | Intermediate layer(Stg table/ADLS) | Source Table | Source Linked Service | Pipeline Name |
+4. **Example Output Path**:
+   `dr.NHSC_EventMessageHeader -> LS_ASA -> Dataflow (df_EventMessageHeader) -> Inbound/GlobalSC/EventMessageHeader -> EDW.PRSTM.S6_SC_TM_EVENTMESSAGEHEADER_DM_V -> LS_SNOWFLAKE_PROD -> pl_EventMessageHeader`
 
 Be precise, cite activity names and relevant sheet references. Process ALL pipelines in the provided data."""),
-    ("⚡ Complex Pipelines", "List the top 10 most complex pipelines based on complexity score. Show their activity counts, dataflow usage, SQL usage, and folder. Use the PipelineAnalysis sheet."),
-    ("🔄 DataFlow Analysis", "Analyze all data flows. For each, show: name, source tables, sink tables, transformation types, and complexity. Use the DataFlows and DataFlowTransformations sheets."),
-    ("👻 Orphaned Resources", "List ALL orphaned resources across all categories (pipelines, dataflows, datasets, linked services, triggers). Show counts and names. Explain the risk of each orphaned resource."),
-    ("💥 Impact Analysis", "Show the top 10 highest-impact pipelines based on blast radius. What would break if each one fails? Use the ImpactAnalysis sheet."),
-    ("🗓️ Trigger Schedule", "Show all triggers with their schedules, associated pipelines, and status. Are there any scheduling conflicts? Use the Triggers and TriggerDetails sheets."),
-    ("🏥 Health Check", "Perform a comprehensive health check: orphaned resources, missing triggers, high-complexity pipelines, unused datasets, and potential issues. Provide recommendations."),
+
+    ("🔍 Column Lineage",
+     """You are an expert ADF Column Lineage Analyst for Tiger Analytics accelerators.
+
+Input is Excel data from ADF Pipeline Analyzer: sheets with pipelines (`Pipelines`, `PipelineAnalysis`), datasets (`Datasets`, `DatasetUsage`), copy/data flow activities (`Activities`, `DataFlows`, `DataFlowLineage`, `DataLineage`), and parameters (`GlobalParameters`).
+
+Task: Extract GRANULAR COLUMN-LEVEL LINEAGE.
+1. Parse sources (datasets/linkedServices), transformations (mappingDataFlows: derived cols, joins, filters, aggregates; copyActivity projections), targets.
+2. For each target column: Trace origin column(s) from source(s), list transformations (e.g., "UPPER(source.col1) AS target_colA"), data types, lineage path.
+3. Detect gaps: Flag unmapped cols, inferred mappings (e.g., via param@dataset.schema), risks (drift, nulls).
+4. Output:
+   - Markdown table: | Target Dataset | Target Column | Source Dataset(s) | Source Column(s) | Transformations | Data Type | Confidence (0-100) |
+   - Summary: Completeness score, critical paths, modernization recs (e.g., to Fabric/dbt).
+
+Be precise, cite activity names and sheet references."""),
+
+    ("⚠️ Orphaned Resources",
+     "List ALL orphaned resources from every Orphaned* sheet: OrphanedPipelines, OrphanedDataFlows, OrphanedDatasets, OrphanedLinkedServices, OrphanedTriggers. Show the complete list with counts per category."),
+
+    ("🏗️ Complex Pipelines",
+     "Show ALL pipelines ranked by ComplexityScore from PipelineAnalysis. Include: Pipeline name, Folder, TotalActivities, Complexity, ComplexityScore, ImpactLevel, HasDataFlow, HasSQL, SourceSystems, TargetSystems."),
+
+    ("💥 Impact Analysis",
+     "From the ImpactAnalysis sheet, show ALL pipelines with CRITICAL or HIGH ImpactLevel. Include blast radius, upstream/downstream counts, connected triggers, and affected datasets."),
+
+    ("🔄 DataFlow Details",
+     "From DataFlows and DataFlowLineage sheets, show ALL dataflows with their source tables, sink tables, transformations, linked services. Which dataflows are most complex?"),
+
+    ("🗓️ Trigger Schedule",
+     "From the Triggers and TriggerDetails sheets, list ALL triggers with: name, type, state (Started/Stopped), frequency, schedule, and which pipelines they execute. Flag any issues."),
+
+    ("🏥 Full Health Check",
+     "Perform a COMPLETE health check using ALL sheets. Report: (1) Orphaned resource counts, (2) Pipelines with CRITICAL impact but no triggers, (3) Overly complex pipelines, (4) Unused datasets, (5) Misconfigured triggers, (6) Any errors from the Errors sheet."),
 ]
 
 
@@ -782,6 +847,34 @@ def render_chatgpt_chat_tab(excel_data: Dict[str, pd.DataFrame] = None):
                 model = st.session_state.gpt_model
                 model_cfg = CHATGPT_MODELS.get(model, CHATGPT_MODELS[DEFAULT_CHATGPT_MODEL])
                 status.write(f"📡 Sending request (~{est_tokens:,} tokens) to {model_cfg.display_name}...")
+
+                # ── PRE-FLIGHT: Context Window Check ──
+                if est_tokens > model_cfg.context_window * 0.9:
+                    # Find models that CAN handle this payload
+                    capable_models = [
+                        f"{cfg.icon} **{cfg.display_name}** (`{name}`) — {cfg.context_window:,} tokens"
+                        for name, cfg in CHATGPT_MODELS.items()
+                        if cfg.context_window >= est_tokens * 1.1
+                    ]
+                    suggestions = "\n".join(f"  - {m}" for m in capable_models[:5]) if capable_models else "  - None available — use Pipeline Filter to reduce data"
+                    
+                    status.update(label="⚠️ Context too large!", state="error")
+                    response = (
+                        f"⚠️ **Context Too Large for {model_cfg.display_name}**\n\n"
+                        f"Your data is **~{est_tokens:,} tokens** but **{model_cfg.display_name}** "
+                        f"only supports **{model_cfg.context_window:,} tokens**.\n\n"
+                        f"### 💡 Solutions:\n\n"
+                        f"**Option 1 — Switch to a larger model:**\n{suggestions}\n\n"
+                        f"**Option 2 — Use Pipeline Filter** (above) to select specific pipelines "
+                        f"and reduce the data size.\n\n"
+                        f"**Option 3 — Use the 🤖 AI Chat (Gemini) tab** which has smart tiered "
+                        f"context that automatically reduces data size."
+                    )
+                    st.markdown(response)
+                    st.session_state.gpt_chat_history.append({"role": "user", "content": active_question})
+                    st.session_state.gpt_chat_history.append({"role": "assistant", "content": response})
+                    st.rerun()
+                    return
 
                 # Build messages
                 system_prompt = build_chatgpt_system_prompt(excel_data)
