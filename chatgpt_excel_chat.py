@@ -47,6 +47,7 @@ class ChatGPTModelConfig:
     icon: str
 
 CHATGPT_MODELS = {
+    # ── GPT-4.1 Family (1M context) ──
     "gpt-4.1": ChatGPTModelConfig(
         "gpt-4.1", "GPT-4.1",
         32768, 1_000_000, "Best coding & instructions, 1M context", "🧠"
@@ -57,8 +58,26 @@ CHATGPT_MODELS = {
     ),
     "gpt-4.1-nano": ChatGPTModelConfig(
         "gpt-4.1-nano", "GPT-4.1 Nano",
-        16384, 1_000_000, "Smallest & fastest", "🚀"
+        16384, 1_000_000, "Smallest & fastest, 1M context", "🚀"
     ),
+    # ── GPT-5 Family (Latest Frontier) ──
+    "gpt-5.4": ChatGPTModelConfig(
+        "gpt-5.4", "GPT-5.4",
+        32768, 1_000_000, "Best intelligence at scale, agentic workflows", "👑"
+    ),
+    "gpt-5.4-pro": ChatGPTModelConfig(
+        "gpt-5.4-pro", "GPT-5.4 Pro",
+        32768, 1_000_000, "Smarter & more precise, pro-tier", "💎"
+    ),
+    "gpt-5-mini": ChatGPTModelConfig(
+        "gpt-5-mini", "GPT-5 Mini",
+        16384, 1_000_000, "Near-frontier, cost-efficient", "🌟"
+    ),
+    "gpt-5-nano": ChatGPTModelConfig(
+        "gpt-5-nano", "GPT-5 Nano",
+        16384, 1_000_000, "Fastest GPT-5, ultra-low cost", "💫"
+    ),
+    # ── GPT-4o Family (128K context) ──
     "gpt-4o": ChatGPTModelConfig(
         "gpt-4o", "GPT-4o",
         16384, 128_000, "Multimodal flagship (128K)", "✨"
@@ -67,9 +86,40 @@ CHATGPT_MODELS = {
         "gpt-4o-mini", "GPT-4o Mini",
         16384, 128_000, "Fast & cheap (128K)", "💨"
     ),
+    "chatgpt-4o-latest": ChatGPTModelConfig(
+        "chatgpt-4o-latest", "ChatGPT-4o Latest",
+        16384, 128_000, "Latest ChatGPT optimized 4o", "🔄"
+    ),
+    # ── GPT-4 Turbo ──
+    "gpt-4-turbo": ChatGPTModelConfig(
+        "gpt-4-turbo", "GPT-4 Turbo",
+        4096, 128_000, "Legacy flagship, vision support", "🏛️"
+    ),
+    # ── O-Series Reasoning Models ──
+    "o3": ChatGPTModelConfig(
+        "o3", "o3",
+        100_000, 200_000, "Most powerful reasoning, complex analysis", "🔬"
+    ),
+    "o3-mini": ChatGPTModelConfig(
+        "o3-mini", "o3-mini",
+        65536, 200_000, "Fast reasoning, math & science", "🧪"
+    ),
     "o4-mini": ChatGPTModelConfig(
         "o4-mini", "o4-mini",
-        65536, 200_000, "Advanced reasoning", "🔬"
+        65536, 200_000, "Latest reasoning, efficient deep-research", "🔮"
+    ),
+    "o1": ChatGPTModelConfig(
+        "o1", "o1",
+        32768, 200_000, "Advanced reasoning (previous gen)", "🧩"
+    ),
+    "o1-mini": ChatGPTModelConfig(
+        "o1-mini", "o1-mini",
+        65536, 128_000, "Fast reasoning, math-focused", "📐"
+    ),
+    # ── GPT-3.5 (Budget) ──
+    "gpt-3.5-turbo": ChatGPTModelConfig(
+        "gpt-3.5-turbo", "GPT-3.5 Turbo",
+        4096, 16_385, "Budget option (16K context)", "💰"
     ),
 }
 
