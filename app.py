@@ -51,6 +51,13 @@ try:
 except ImportError:
     HAS_AI_CHAT = False
 
+# ChatGPT Integration
+try:
+    from chatgpt_excel_chat import render_chatgpt_chat_tab
+    HAS_CHATGPT = True
+except ImportError:
+    HAS_CHATGPT = False
+
 # Network Analysis (Optional)
 try:
     import networkx as nx
@@ -1751,7 +1758,7 @@ class ADF_Dashboard:
             st.info("🔧 **Generate Excel Mode** - Click tab to configure analyzer")
         
         # Main tabs
-        tab_labels = ["⚙️ Generate Excel", "📊 Upload & Analyze", "🤖 AI Chat", "📚 Documentation"]
+        tab_labels = ["⚙️ Generate Excel", "📊 Upload & Analyze", "🤖 AI Chat", "🧠 ChatGPT", "📚 Documentation"]
         main_tabs = st.tabs(tab_labels)
         
         with main_tabs[0]:
@@ -1774,6 +1781,14 @@ class ADF_Dashboard:
                 st.code("pip install requests python-dotenv", language="bash")
         
         with main_tabs[3]:
+            if HAS_CHATGPT:
+                excel_data = st.session_state.get('excel_data', {})
+                render_chatgpt_chat_tab(excel_data=excel_data)
+            else:
+                st.warning("⚠️ ChatGPT module not available. Please ensure `chatgpt_excel_chat.py` is in the project directory.")
+                st.code("pip install requests python-dotenv", language="bash")
+        
+        with main_tabs[4]:
             self.render_comprehensive_documentation()
 
     def render_generate_excel_tab(self):
