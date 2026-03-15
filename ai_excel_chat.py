@@ -499,6 +499,12 @@ class ExcelContextBuilder:
         return f"""You are an expert Azure Data Factory (ADF) Analyst AI Assistant.
 You have access to the COMPLETE output of an an ADF ARM Template Analyzer tool.
 
+CONVERSATIONAL MEMORY:
+You are having a multi-turn conversation. You MUST remember and reference previous questions
+and your own previous answers. If the user says "show more", "explain that", "what about the
+previous one", or references something from earlier — look at the conversation history and
+build upon it. Never say "I don't have access to previous messages" — you DO.
+
 ════════════════════════════════════════════════════════════
 HOW THIS DATA WAS GENERATED (Core Analyzer Knowledge):
 ════════════════════════════════════════════════════════════
@@ -2423,9 +2429,9 @@ REMINDER: At the end, mention which sheets you used to answer.
 ══════════════════════════════════════════
 """
 
-    # History summary to prevent token bloat
+    # Conversation memory — keep last 12 messages (6 full exchanges) for real context
     api_history = st.session_state.get("ai_api_history", [])
-    max_history = 4  # Tighter cap to prevent context overflow on follow-ups
+    max_history = 12  # 6 user+model pairs for rich conversational memory
     if len(api_history) > max_history:
         api_history = api_history[-max_history:]
     
@@ -2440,8 +2446,8 @@ REMINDER: At the end, mention which sheets you used to answer.
     )
     
     if response and not response.startswith("❌"):
-        # Update internal history
-        st.session_state.ai_api_history.append({"role": "user", "parts": [{"text": f"[Contextual Question]: {question}"}]})
+        # Update conversation memory — store full question for recall
+        st.session_state.ai_api_history.append({"role": "user", "parts": [{"text": question}]})
         st.session_state.ai_api_history.append({"role": "model", "parts": [{"text": response}]})
         st.session_state.ai_total_tokens_used += est_tokens
         
