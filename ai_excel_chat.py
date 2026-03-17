@@ -1961,6 +1961,7 @@ def render_ai_chat_tab(excel_data: Dict[str, pd.DataFrame] = None):
                             count = len(level_pipelines)
                             icon = {"Simple": "🟢", "Medium": "🟡", "Complex": "🟠", "Critical": "🔴"}.get(str(level), "⚪")
                             if st.button(f"{icon} {level} ({count})", key=f"complexity_{ci}", use_container_width=True):
+                                st.session_state.pipeline_multiselect = level_pipelines
                                 st.session_state.ai_pipeline_filter = level_pipelines
                                 st.rerun()
                     
@@ -1978,6 +1979,7 @@ def render_ai_chat_tab(excel_data: Dict[str, pd.DataFrame] = None):
                                 count = len(impact_pipelines)
                                 icon = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "🟢"}.get(str(impact).upper(), "⚪")
                                 if st.button(f"{icon} {impact} ({count})", key=f"impact_{ii}", use_container_width=True):
+                                    st.session_state.pipeline_multiselect = impact_pipelines
                                     st.session_state.ai_pipeline_filter = impact_pipelines
                                     st.rerun()
                 else:
@@ -1988,21 +1990,35 @@ def render_ai_chat_tab(excel_data: Dict[str, pd.DataFrame] = None):
                 mcol1, mcol2 = st.columns(2)
                 with mcol1:
                     if st.button("📋 Select All", key="filter_select_all", use_container_width=True):
+                        # Set the WIDGET key directly — single source of truth
+                        st.session_state.pipeline_multiselect = all_pipeline_names
                         st.session_state.ai_pipeline_filter = all_pipeline_names
                         st.rerun()
                 with mcol2:
                     if st.button("🧹 Clear All", key="filter_clear_all", use_container_width=True):
+                        st.session_state.pipeline_multiselect = []
                         st.session_state.ai_pipeline_filter = []
                         st.rerun()
                 
-                selected_pipelines = st.multiselect(
+                # Use widget key as single source of truth
+                # The default= parameter only works on FIRST render,
+                # so we pre-seed the widget key in session_state instead
+                if "pipeline_multiselect" not in st.session_state:
+                    st.session_state.pipeline_multiselect = st.session_state.get("ai_pipeline_filter", [])
+                
+                def _on_pipeline_filter_change():
+                    """Sync widget state → filter state on every change."""
+                    st.session_state.ai_pipeline_filter = st.session_state.pipeline_multiselect
+                
+                st.multiselect(
                     "Select Pipelines:",
                     options=all_pipeline_names,
-                    default=st.session_state.get("ai_pipeline_filter", []),
                     key="pipeline_multiselect",
                     placeholder="All Pipelines (no filter)",
+                    on_change=_on_pipeline_filter_change,
                 )
-                st.session_state.ai_pipeline_filter = selected_pipelines
+                # Always sync after render
+                st.session_state.ai_pipeline_filter = st.session_state.get("pipeline_multiselect", [])
 
             # ── Filter Status Bar ──
             current_sel = st.session_state.get("ai_pipeline_filter", [])
@@ -2037,14 +2053,20 @@ def render_ai_chat_tab(excel_data: Dict[str, pd.DataFrame] = None):
             all_dataflow_names = sorted(ctx_builder.sheets["DataFlows"]["DataFlow"].dropna().unique().tolist())
         
         if all_dataflow_names:
-            df_filter = st.multiselect(
+            if "dataflow_multiselect" not in st.session_state:
+                st.session_state.dataflow_multiselect = st.session_state.get("ai_dataflow_filter", [])
+            
+            def _on_dataflow_filter_change():
+                st.session_state.ai_dataflow_filter = st.session_state.dataflow_multiselect
+            
+            st.multiselect(
                 f"🔄 DataFlow Filter ({len(all_dataflow_names)})",
                 options=all_dataflow_names,
-                default=st.session_state.get("ai_dataflow_filter", []),
                 key="dataflow_multiselect",
                 placeholder="All DataFlows (no filter)",
+                on_change=_on_dataflow_filter_change,
             )
-            st.session_state.ai_dataflow_filter = df_filter
+            st.session_state.ai_dataflow_filter = st.session_state.get("dataflow_multiselect", [])
     
     # Trigger Filter
     with entity_filter_col2:
@@ -2053,14 +2075,20 @@ def render_ai_chat_tab(excel_data: Dict[str, pd.DataFrame] = None):
             all_trigger_names = sorted(ctx_builder.sheets["Triggers"]["Trigger"].dropna().unique().tolist())
         
         if all_trigger_names:
-            trig_filter = st.multiselect(
+            if "trigger_multiselect" not in st.session_state:
+                st.session_state.trigger_multiselect = st.session_state.get("ai_trigger_filter", [])
+            
+            def _on_trigger_filter_change():
+                st.session_state.ai_trigger_filter = st.session_state.trigger_multiselect
+            
+            st.multiselect(
                 f"🗓️ Trigger Filter ({len(all_trigger_names)})",
                 options=all_trigger_names,
-                default=st.session_state.get("ai_trigger_filter", []),
                 key="trigger_multiselect",
                 placeholder="All Triggers (no filter)",
+                on_change=_on_trigger_filter_change,
             )
-            st.session_state.ai_trigger_filter = trig_filter
+            st.session_state.ai_trigger_filter = st.session_state.get("trigger_multiselect", [])
 
     # ── Preset Quick Questions (Context-Aware with Filter Guidance) ──
     no_history = len(st.session_state.ai_chat_history) == 0
