@@ -524,8 +524,8 @@ def load_custom_css(theme: str = "midnight"):
         }}
 
         /* Hide Streamlit branding */
-        #MainMenu { visibility: hidden; }
-        footer    { visibility: hidden; }
+        #MainMenu {{ visibility: hidden; }}
+        footer    {{ visibility: hidden; }}
     </style>
     """, unsafe_allow_html=True)
 
